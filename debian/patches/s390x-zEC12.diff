@@ -1,0 +1,31 @@
+--- a/make/autoconf/flags.m4
++++ b/make/autoconf/flags.m4
+@@ -851,7 +851,7 @@ AC_DEFUN([FLAGS_SETUP_COMPILER_FLAGS_FOR
+         $2CFLAGS_JDK="${$2CFLAGS_JDK} -fno-strict-aliasing"
+         ;;
+       s390 )
+-        $2COMMON_CCXXFLAGS_JDK="[$]$2COMMON_CCXXFLAGS_JDK -fno-omit-frame-pointer -mbackchain -march=z10"
++        $2COMMON_CCXXFLAGS_JDK="[$]$2COMMON_CCXXFLAGS_JDK -fno-omit-frame-pointer -mbackchain -march=zEC12"
+         $2CFLAGS_JDK="${$2CFLAGS_JDK} -fno-strict-aliasing"
+         ;;
+       * )
+@@ -1034,7 +1034,7 @@ AC_DEFUN([FLAGS_SETUP_COMPILER_FLAGS_FOR
+     fi
+   elif test "x$OPENJDK_$1_CPU" = xs390x; then
+     if test "x$OPENJDK_$1_OS" = xlinux; then
+-      $2JVM_CFLAGS="[$]$2JVM_CFLAGS -mbackchain -march=z10"
++      $2JVM_CFLAGS="[$]$2JVM_CFLAGS -mbackchain -march=zEC12"
+     fi
+   fi
+ 
+--- a/make/hotspot/lib/CompileLibjsig.gmk
++++ b/make/hotspot/lib/CompileLibjsig.gmk
+@@ -53,7 +53,7 @@ ifneq ($(OPENJDK_TARGET_OS), windows)
+       else ifeq ($(OPENJDK_TARGET_CPU), ppc64le)
+         LIBJSIG_CPU_FLAGS := -DABI_ELFv2 -mcpu=power8 -mtune=power8
+       else ifeq ($(OPENJDK_TARGET_CPU), s390x)
+-        LIBJSIG_CPU_FLAGS := -mbackchain -march=z10
++        LIBJSIG_CPU_FLAGS := -mbackchain -march=zEC12
+       endif
+ 
+     else ifeq ($(OPENJDK_TARGET_OS), solaris)

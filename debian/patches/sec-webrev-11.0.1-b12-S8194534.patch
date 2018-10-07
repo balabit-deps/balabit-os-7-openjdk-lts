@@ -1,0 +1,328 @@
+# HG changeset patch
+# User weijun
+# Date 1523951749 -28800
+#      Tue Apr 17 15:55:49 2018 +0800
+# Node ID 65384f6a933f46e9ab0316842e6f53d41e267ef2
+# Parent  9e2e612530672ac2676e0d603ffb6af791af1e61
+8194534: Manifest better support
+Reviewed-by: mchung, igerasim
+
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/java/net/URLClassLoader.java
+--- a/src/java.base/share/classes/java/net/URLClassLoader.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/java/net/URLClassLoader.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -570,13 +570,13 @@
+      * @spec JPMS
+      */
+     protected Package definePackage(String name, Manifest man, URL url) {
+-        String path = name.replace('.', '/').concat("/");
+         String specTitle = null, specVersion = null, specVendor = null;
+         String implTitle = null, implVersion = null, implVendor = null;
+         String sealed = null;
+         URL sealBase = null;
+ 
+-        Attributes attr = man.getAttributes(path);
++        Attributes attr = SharedSecrets.javaUtilJarAccess()
++                .getTrustedAttributes(man, name.replace('.', '/').concat("/"));
+         if (attr != null) {
+             specTitle   = attr.getValue(Name.SPECIFICATION_TITLE);
+             specVersion = attr.getValue(Name.SPECIFICATION_VERSION);
+@@ -620,10 +620,12 @@
+     /*
+      * Returns true if the specified package name is sealed according to the
+      * given manifest.
++     *
++     * @throws SecurityException if the package name is untrusted in the manifest
+      */
+     private boolean isSealed(String name, Manifest man) {
+-        String path = name.replace('.', '/').concat("/");
+-        Attributes attr = man.getAttributes(path);
++        Attributes attr = SharedSecrets.javaUtilJarAccess()
++                .getTrustedAttributes(man, name.replace('.', '/').concat("/"));
+         String sealed = null;
+         if (attr != null) {
+             sealed = attr.getValue(Name.SEALED);
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/java/util/jar/JarFile.java
+--- a/src/java.base/share/classes/java/util/jar/JarFile.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/java/util/jar/JarFile.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -412,10 +412,10 @@
+             if (manEntry != null) {
+                 if (verify) {
+                     byte[] b = getBytes(manEntry);
+-                    man = new Manifest(new ByteArrayInputStream(b));
+                     if (!jvInitialized) {
+                         jv = new JarVerifier(b);
+                     }
++                    man = new Manifest(jv, new ByteArrayInputStream(b));
+                 } else {
+                     man = new Manifest(super.getInputStream(manEntry));
+                 }
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/java/util/jar/JarVerifier.java
+--- a/src/java.base/share/classes/java/util/jar/JarVerifier.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/java/util/jar/JarVerifier.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -868,4 +868,24 @@
+     static CodeSource getUnsignedCS(URL url) {
+         return new VerifierCodeSource(null, url, (java.security.cert.Certificate[]) null);
+     }
++
++    /**
++     * Returns whether the name is trusted. Used by
++     * {@link Manifest#getTrustedAttributes(String)}.
++     */
++    boolean isTrustedManifestEntry(String name) {
++        // How many signers? MANIFEST.MF is always verified
++        CodeSigner[] forMan = verifiedSigners.get(JarFile.MANIFEST_NAME);
++        if (forMan == null) {
++            return true;
++        }
++        // Check sigFileSigners first, because we are mainly dealing with
++        // non-file entries which will stay in sigFileSigners forever.
++        CodeSigner[] forName = sigFileSigners.get(name);
++        if (forName == null) {
++            forName = verifiedSigners.get(name);
++        }
++        // Returns trusted if all signers sign the entry
++        return forName != null && forName.length == forMan.length;
++    }
+ }
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/java/util/jar/JavaUtilJarAccessImpl.java
+--- a/src/java.base/share/classes/java/util/jar/JavaUtilJarAccessImpl.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/java/util/jar/JavaUtilJarAccessImpl.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2002, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -60,4 +60,9 @@
+     public List<Object> getManifestDigests(JarFile jar) {
+         return jar.getManifestDigests();
+     }
++
++    public Attributes getTrustedAttributes(Manifest man, String name) {
++        return man.getTrustedAttributes(name);
++    }
++
+ }
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/java/util/jar/Manifest.java
+--- a/src/java.base/share/classes/java/util/jar/Manifest.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/java/util/jar/Manifest.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -32,7 +32,6 @@
+ import java.io.IOException;
+ import java.util.Map;
+ import java.util.HashMap;
+-import java.util.Iterator;
+ 
+ /**
+  * The Manifest class is used to maintain Manifest entry names and their
+@@ -48,15 +47,19 @@
+  */
+ public class Manifest implements Cloneable {
+     // manifest main attributes
+-    private Attributes attr = new Attributes();
++    private final Attributes attr = new Attributes();
+ 
+     // manifest entries
+-    private Map<String, Attributes> entries = new HashMap<>();
++    private final Map<String, Attributes> entries = new HashMap<>();
++
++    // associated JarVerifier, not null when called by JarFile::getManifest.
++    private final JarVerifier jv;
+ 
+     /**
+      * Constructs a new, empty Manifest.
+      */
+     public Manifest() {
++        jv = null;
+     }
+ 
+     /**
+@@ -66,7 +69,16 @@
+      * @throws IOException if an I/O error has occurred
+      */
+     public Manifest(InputStream is) throws IOException {
++        this(null, is);
++    }
++
++    /**
++     * Constructs a new Manifest from the specified input stream
++     * and associates it with a JarVerifier.
++     */
++    Manifest(JarVerifier jv, InputStream is) throws IOException {
+         read(is);
++        this.jv = jv;
+     }
+ 
+     /**
+@@ -77,6 +89,7 @@
+     public Manifest(Manifest man) {
+         attr.putAll(man.getMainAttributes());
+         entries.putAll(man.getEntries());
++        jv = man.jv;
+     }
+ 
+     /**
+@@ -127,6 +140,23 @@
+     }
+ 
+     /**
++     * Returns the Attributes for the specified entry name, if trusted.
++     *
++     * @param name entry name
++     * @return returns the same result as {@link #getAttributes(String)}
++     * @throws SecurityException if the associated jar is signed but this entry
++     *      has been modified after signing (i.e. the section in the manifest
++     *      does not exist in SF files of all signers).
++     */
++    Attributes getTrustedAttributes(String name) {
++        Attributes result = getAttributes(name);
++        if (result != null && jv != null && ! jv.isTrustedManifestEntry(name)) {
++            throw new SecurityException("Untrusted manifest entry: " + name);
++        }
++        return result;
++    }
++
++    /**
+      * Clears the main Attributes as well as the entries in this Manifest.
+      */
+     public void clear() {
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/jdk/internal/loader/BuiltinClassLoader.java
+--- a/src/java.base/share/classes/jdk/internal/loader/BuiltinClassLoader.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/jdk/internal/loader/BuiltinClassLoader.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -60,6 +60,7 @@
+ import java.util.jar.Manifest;
+ import java.util.stream.Stream;
+ 
++import jdk.internal.misc.SharedSecrets;
+ import jdk.internal.misc.VM;
+ import jdk.internal.module.ModulePatcher.PatchedModuleReader;
+ import jdk.internal.module.Resources;
+@@ -862,7 +863,8 @@
+      * Manifest are use to get the package version and sealing information.
+      *
+      * @throws IllegalArgumentException if the package name duplicates an
+-     * existing package either in this class loader or one of its ancestors
++     *      existing package either in this class loader or one of its ancestors
++     * @throws SecurityException if the package name is untrusted in the manifest
+      */
+     private Package definePackage(String pn, Manifest man, URL url) {
+         String specTitle = null;
+@@ -875,7 +877,8 @@
+         URL sealBase = null;
+ 
+         if (man != null) {
+-            Attributes attr = man.getAttributes(pn.replace('.', '/').concat("/"));
++            Attributes attr = SharedSecrets.javaUtilJarAccess()
++                    .getTrustedAttributes(man, pn.replace('.', '/').concat("/"));
+             if (attr != null) {
+                 specTitle = attr.getValue(Attributes.Name.SPECIFICATION_TITLE);
+                 specVersion = attr.getValue(Attributes.Name.SPECIFICATION_VERSION);
+@@ -921,10 +924,12 @@
+     /**
+      * Returns {@code true} if the specified package name is sealed according to
+      * the given manifest.
++     *
++     * @throws SecurityException if the package name is untrusted in the manifest
+      */
+     private boolean isSealed(String pn, Manifest man) {
+-        String path = pn.replace('.', '/').concat("/");
+-        Attributes attr = man.getAttributes(path);
++        Attributes attr = SharedSecrets.javaUtilJarAccess()
++                .getTrustedAttributes(man, pn.replace('.', '/').concat("/"));
+         String sealed = null;
+         if (attr != null)
+             sealed = attr.getValue(Attributes.Name.SEALED);
+diff -r 9e2e61253067 -r 65384f6a933f src/java.base/share/classes/jdk/internal/misc/JavaUtilJarAccess.java
+--- a/src/java.base/share/classes/jdk/internal/misc/JavaUtilJarAccess.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/src/java.base/share/classes/jdk/internal/misc/JavaUtilJarAccess.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2002, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -30,8 +30,10 @@
+ import java.security.CodeSource;
+ import java.util.Enumeration;
+ import java.util.List;
++import java.util.jar.Attributes;
+ import java.util.jar.JarEntry;
+ import java.util.jar.JarFile;
++import java.util.jar.Manifest;
+ 
+ public interface JavaUtilJarAccess {
+     public boolean jarFileHasClassPathAttribute(JarFile jar) throws IOException;
+@@ -41,4 +43,5 @@
+     public Enumeration<JarEntry> entries2(JarFile jar);
+     public void setEagerValidation(JarFile jar, boolean eager);
+     public List<Object> getManifestDigests(JarFile jar);
++    public Attributes getTrustedAttributes(Manifest man, String name);
+ }
+diff -r 9e2e61253067 -r 65384f6a933f test/lib/jdk/test/lib/util/JarUtils.java
+--- a/test/lib/jdk/test/lib/util/JarUtils.java	Mon Apr 16 13:31:19 2018 -0700
++++ b/test/lib/jdk/test/lib/util/JarUtils.java	Tue Apr 17 15:55:49 2018 +0800
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -23,6 +23,7 @@
+ 
+ package jdk.test.lib.util;
+ 
++import java.io.ByteArrayOutputStream;
+ import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.FileOutputStream;
+@@ -126,6 +127,11 @@
+         changes = new HashMap<>(changes);
+ 
+         System.out.printf("Creating %s from %s...\n", dest, src);
++
++        if (dest.equals(src)) {
++            throw new IOException("src and dest cannot be the same");
++        }
++
+         try (JarOutputStream jos = new JarOutputStream(
+                 new FileOutputStream(dest))) {
+ 
+@@ -153,6 +159,22 @@
+         System.out.println();
+     }
+ 
++    /**
++     * Update the Manifest inside a jar.
++     *
++     * @param src the original jar file name
++     * @param dest the new jar file name
++     * @param man the Manifest
++     *
++     * @throws IOException
++     */
++    public static void updateManifest(String src, String dest, Manifest man)
++            throws IOException {
++        ByteArrayOutputStream bout = new ByteArrayOutputStream();
++        man.write(bout);
++        updateJar(src, dest, Map.of(JarFile.MANIFEST_NAME, bout.toByteArray()));
++    }
++
+     private static void updateEntry(JarOutputStream jos, String name, Object content)
+            throws IOException {
+         if (content instanceof Boolean) {

@@ -1,0 +1,129 @@
+# HG changeset patch
+# User sherman
+# Date 1522875330 25200
+#      Wed Apr 04 13:55:30 2018 -0700
+# Node ID bb5b407dfe6de192eff4a057480f4928d34b08c6
+# Parent  fc5bd51aa356d435ea38aaa5a6f05a40989554ed
+8199172: Improve jar attribute checks
+Reviewed-by: psandoz, alanb
+
+diff -r fc5bd51aa356 -r bb5b407dfe6d src/java.base/share/classes/java/util/jar/JarFile.java
+--- a/src/java.base/share/classes/java/util/jar/JarFile.java	Tue Apr 03 23:17:10 2018 -0700
++++ b/src/java.base/share/classes/java/util/jar/JarFile.java	Wed Apr 04 13:55:30 2018 -0700
+@@ -1005,29 +1005,13 @@
+                     int i = match(MULTIRELEASE_CHARS, b, MULTIRELEASE_LASTOCC,
+                             MULTIRELEASE_OPTOSFT);
+                     if (i != -1) {
+-                        i += MULTIRELEASE_CHARS.length;
+-                        if (i < b.length) {
+-                            byte c = b[i++];
+-                            // Check that the value is followed by a newline
+-                            // and does not have a continuation
+-                            if (c == '\n' &&
+-                                    (i == b.length || b[i] != ' ')) {
+-                                isMultiRelease = true;
+-                            } else if (c == '\r') {
+-                                if (i == b.length) {
+-                                    isMultiRelease = true;
+-                                } else {
+-                                    c = b[i++];
+-                                    if (c == '\n') {
+-                                        if (i == b.length || b[i] != ' ') {
+-                                            isMultiRelease = true;
+-                                        }
+-                                    } else if (c != ' ') {
+-                                        isMultiRelease = true;
+-                                    }
+-                                }
+-                            }
+-                        }
++                        // Read the main attributes of the manifest
++                        byte[] lbuf = new byte[512];
++                        Attributes attr = new Attributes();
++                        attr.read(new Manifest.FastInputStream(
++                            new ByteArrayInputStream(b)), lbuf);
++                        isMultiRelease = Boolean.parseBoolean(
++                            attr.getValue(Attributes.Name.MULTI_RELEASE));
+                     }
+                 }
+             }
+diff -r fc5bd51aa356 -r bb5b407dfe6d test/jdk/java/util/jar/JarFile/mrjar/MultiReleaseJarAPI.java
+--- a/test/jdk/java/util/jar/JarFile/mrjar/MultiReleaseJarAPI.java	Tue Apr 03 23:17:10 2018 -0700
++++ b/test/jdk/java/util/jar/JarFile/mrjar/MultiReleaseJarAPI.java	Wed Apr 04 13:55:30 2018 -0700
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -23,7 +23,7 @@
+ 
+ /*
+  * @test
+- * @bug 8132734 8144062 8165723
++ * @bug 8132734 8144062 8165723 8199172
+  * @summary Test the extended API and the aliasing additions in JarFile that
+  *          support multi-release jar files
+  * @library /lib/testlibrary/java/util/jar /test/lib
+@@ -100,16 +100,30 @@
+         testCustomMultiReleaseValue("true", true);
+         testCustomMultiReleaseValue("true\r\nOther: value", true);
+         testCustomMultiReleaseValue("true\nOther: value", true);
+-        testCustomMultiReleaseValue("true\rOther: value", true);
++        // JDK-8200530: '\r' support in Manifest/Attributes will be addressed separately
++        // testCustomMultiReleaseValue("true\rOther: value", true);
+ 
+         testCustomMultiReleaseValue("false", false);
+         testCustomMultiReleaseValue(" true", false);
+         testCustomMultiReleaseValue("true ", false);
+-        testCustomMultiReleaseValue("true\n ", false);
+-        testCustomMultiReleaseValue("true\r ", false);
+         testCustomMultiReleaseValue("true\n true", false);
++
++        // JDK-8200530: '\r' support in Manifest/Attributes will be addressed separately
++        testCustomMultiReleaseValue("true\r true", false);
+         testCustomMultiReleaseValue("true\r\n true", false);
+ 
++        // "Multi-Release: true/false" not in main attributes
++        testCustomMultiReleaseValue("\r\n\r\nName: test\r\nMulti-Release: true\r\n",
++                                    false);
++        testCustomMultiReleaseValue("\n\nName: entryname\nMulti-Release: true\n",
++                                    false);
++        testCustomMultiReleaseValue("EndOfMainAttr: whatever\r\n" +
++                                    "\r\nName: entryname\r\nMulti-Release: true\r\n",
++                                    false);
++        testCustomMultiReleaseValue("EndOfMainAttr: whatever\r\n" +
++                                    "\nName: entryname\nMulti-Release: true\n",
++                                    false);
++
+         // generate "random" Strings to use as extra attributes, and
+         // verify that Multi-Release: true is always properly matched
+         for (int i = 0; i < 100; i++) {
+diff -r fc5bd51aa356 -r bb5b407dfe6d test/jdk/lib/testlibrary/java/util/jar/CreateMultiReleaseTestJars.java
+--- a/test/jdk/lib/testlibrary/java/util/jar/CreateMultiReleaseTestJars.java	Tue Apr 03 23:17:10 2018 -0700
++++ b/test/jdk/lib/testlibrary/java/util/jar/CreateMultiReleaseTestJars.java	Wed Apr 04 13:55:30 2018 -0700
+@@ -142,6 +142,12 @@
+     }
+ 
+     public void buildSignedMultiReleaseJar() throws Exception {
++        buildSignedMultiReleaseJar("multi-release.jar", "signed-multi-release.jar");
++    }
++
++    public void buildSignedMultiReleaseJar(String multiReleaseJar,
++                                           String signedMultiReleaseJar) throws Exception
++    {
+         String testsrc = System.getProperty("test.src",".");
+         String testdir = findTestDir(testsrc);
+         String keystore = testdir + "/sun/security/tools/jarsigner/JarSigning.keystore";
+@@ -155,8 +161,8 @@
+         CertPath cp = CertificateFactory.getInstance("X.509")
+                 .generateCertPath(Arrays.asList(ks.getCertificateChain("b")));
+         JarSigner js = new JarSigner.Builder(pkb, cp).build();
+-        try (ZipFile in = new ZipFile("multi-release.jar");
+-             FileOutputStream os = new FileOutputStream("signed-multi-release.jar"))
++        try (ZipFile in = new ZipFile(multiReleaseJar);
++             FileOutputStream os = new FileOutputStream(signedMultiReleaseJar))
+         {
+             js.sign(in, os);
+         }

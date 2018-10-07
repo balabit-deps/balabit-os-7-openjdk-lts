@@ -1,0 +1,100 @@
+Index: b/src/java.desktop/share/classes/sun/applet/AppletPanel.java
+===================================================================
+--- a/src/java.desktop/share/classes/sun/applet/AppletPanel.java
++++ b/src/java.desktop/share/classes/sun/applet/AppletPanel.java
+@@ -66,7 +66,7 @@ abstract class AppletPanel extends Panel
+     /**
+      * The applet (if loaded).
+      */
+-    Applet applet;
++    protected Applet applet;
+ 
+ 
+     /**
+@@ -152,7 +152,8 @@ abstract class AppletPanel extends Panel
+      * Creates a thread to run the applet. This method is called
+      * each time an applet is loaded and reloaded.
+      */
+-    synchronized void createAppletThread() {
++	//Overridden by NetxPanel.
++    protected synchronized void createAppletThread() {
+         // Create a thread group for the applet, and start a new
+         // thread to load the applet.
+         String nm = "applet-" + getCode();
+@@ -298,7 +299,7 @@ abstract class AppletPanel extends Panel
+     /**
+      * Get an event from the queue.
+      */
+-    synchronized AppletEvent getNextEvent() throws InterruptedException {
++    protected synchronized AppletEvent getNextEvent() throws InterruptedException {
+         while (queue == null || queue.isEmpty()) {
+             wait();
+         }
+@@ -665,7 +666,7 @@ abstract class AppletPanel extends Panel
+      * things like HotJava.
+      */
+     @SuppressWarnings("deprecation")
+-    private void runLoader() {
++    protected void runLoader() {
+         if (status != APPLET_DISPOSE) {
+             showAppletStatus("notdisposed");
+             return;
+Index: b/src/java.desktop/share/classes/sun/applet/AppletViewerPanel.java
+===================================================================
+--- a/src/java.desktop/share/classes/sun/applet/AppletViewerPanel.java
++++ b/src/java.desktop/share/classes/sun/applet/AppletViewerPanel.java
+@@ -46,25 +46,25 @@ import java.applet.*;
+  * documentation</a> for further information.
+  */
+ @Deprecated(since = "9")
+-class AppletViewerPanel extends AppletPanel {
++public class AppletViewerPanel extends AppletPanel {
+ 
+     /* Are we debugging? */
+-    static boolean debug = false;
++    protected static boolean debug = false;
+ 
+     /**
+      * The document url.
+      */
+-    URL documentURL;
++    protected URL documentURL;
+ 
+     /**
+      * The base url.
+      */
+-    URL baseURL;
++    protected URL baseURL;
+ 
+     /**
+      * The attributes of the applet.
+      */
+-    Hashtable<String, String> atts;
++    protected Hashtable<String, String> atts;
+ 
+     /*
+      * JDK 1.1 serialVersionUID
+@@ -74,7 +74,7 @@ class AppletViewerPanel extends AppletPa
+     /**
+      * Construct an applet viewer and start the applet.
+      */
+-    AppletViewerPanel(URL documentURL, Hashtable<String, String> atts) {
++    protected AppletViewerPanel(URL documentURL, Hashtable<String, String> atts) {
+         this.documentURL = documentURL;
+         this.atts = atts;
+ 
+@@ -207,12 +207,12 @@ class AppletViewerPanel extends AppletPa
+         return (AppletContext)getParent();
+     }
+ 
+-    static void debug(String s) {
++    protected static void debug(String s) {
+         if(debug)
+             System.err.println("AppletViewerPanel:::" + s);
+     }
+ 
+-    static void debug(String s, Throwable t) {
++    protected static void debug(String s, Throwable t) {
+         if(debug) {
+             t.printStackTrace();
+             debug(s);

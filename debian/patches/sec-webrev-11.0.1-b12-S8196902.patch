@@ -1,0 +1,97 @@
+# HG changeset patch
+# User michaelm
+# Date 1531207213 -3600
+#      Tue Jul 10 08:20:13 2018 +0100
+# Node ID 11c8538d53a7224e41ea2737821f9bce3b7c5cfa
+# Parent  aea6b6d0506bad627a19bb1550491e9811b972a7
+8196902: Better HTTP Redirection
+Reviewed-by: dfuchs
+Contributed-by: chris.hegarty@oracle.com
+
+diff -r aea6b6d0506b -r 11c8538d53a7 src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java
+--- a/src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java	Fri Jul 20 08:28:39 2018 -0700
++++ b/src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java	Tue Jul 10 08:20:13 2018 +0100
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1995, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -2725,6 +2725,8 @@
+             // doesn't know about proxy.
+             useProxyResponseCode = true;
+         } else {
++            final URL prevURL = url;
++
+             // maintain previous headers, just change the name
+             // of the file we're getting
+             url = locUrl;
+@@ -2753,6 +2755,14 @@
+                 poster = null;
+                 if (!checkReuseConnection())
+                     connect();
++
++                if (!sameDestination(prevURL, url)) {
++                    // Ensures pre-redirect user-set cookie will not be reset.
++                    // CookieHandler, if any, will be queried to determine
++                    // cookies for redirected URL, if any.
++                    userCookies = null;
++                    userCookies2 = null;
++                }
+             } else {
+                 if (!checkReuseConnection())
+                     connect();
+@@ -2775,11 +2785,52 @@
+                     }
+                     requests.set("Host", host);
+                 }
++
++                if (!sameDestination(prevURL, url)) {
++                    // Redirecting to a different destination will drop any
++                    // security-sensitive headers, regardless of whether
++                    // they are user-set or not. CookieHandler, if any, will be
++                    // queried to determine cookies for redirected URL, if any.
++                    userCookies = null;
++                    userCookies2 = null;
++                    requests.remove("Cookie");
++                    requests.remove("Cookie2");
++                    requests.remove("Authorization");
++
++                    // check for preemptive authorization
++                    AuthenticationInfo sauth =
++                            AuthenticationInfo.getServerAuth(url, getAuthenticatorKey());
++                    if (sauth != null && sauth.supportsPreemptiveAuthorization() ) {
++                        // Sets "Authorization"
++                        requests.setIfNotSet(sauth.getHeaderName(), sauth.getHeaderValue(url,method));
++                        currentServerCredentials = sauth;
++                    }
++                }
+             }
+         }
+         return true;
+     }
+ 
++    /* Returns true iff the given URLs have the same host and effective port. */
++    private static boolean sameDestination(URL firstURL, URL secondURL) {
++        assert firstURL.getProtocol().equalsIgnoreCase(secondURL.getProtocol()):
++               "protocols not equal: " + firstURL +  " - " + secondURL;
++
++        if (!firstURL.getHost().equalsIgnoreCase(secondURL.getHost()))
++            return false;
++
++        int firstPort = firstURL.getPort();
++        if (firstPort == -1)
++            firstPort = firstURL.getDefaultPort();
++        int secondPort = secondURL.getPort();
++        if (secondPort == -1)
++            secondPort = secondURL.getDefaultPort();
++        if (firstPort != secondPort)
++            return false;
++
++        return true;
++    }
++
+     /* dummy byte buffer for reading off socket prior to closing */
+     byte[] cdata = new byte [128];
+ 

@@ -1,0 +1,34 @@
+Index: b/src/hotspot/os/linux/os_linux.cpp
+===================================================================
+--- a/src/hotspot/os/linux/os_linux.cpp
++++ b/src/hotspot/os/linux/os_linux.cpp
+@@ -326,10 +326,10 @@ void os::init_system_properties_values()
+   //        1: ...
+   //        ...
+   //        7: The default directories, normally /lib and /usr/lib.
+-#if defined(AMD64) || (defined(_LP64) && defined(SPARC)) || defined(PPC64) || defined(S390)
+-  #define DEFAULT_LIBPATH "/usr/lib64:/lib64:/lib:/usr/lib"
++#ifdef DEB_MULTIARCH
++#define DEFAULT_LIBPATH	"/usr/lib/" DEB_MULTIARCH "/jni" ":/lib/" DEB_MULTIARCH ":/usr/lib/" DEB_MULTIARCH ":/usr/lib/jni:/lib:/usr/lib"
+ #else
+-  #define DEFAULT_LIBPATH "/lib:/usr/lib"
++  #define DEFAULT_LIBPATH "/usr/lib/jni:/lib:/usr/lib"
+ #endif
+ 
+ // Base path of extensions installed on the system.
+Index: b/make/hotspot/lib/CompileJvm.gmk
+===================================================================
+--- a/make/hotspot/lib/CompileJvm.gmk
++++ b/make/hotspot/lib/CompileJvm.gmk
+@@ -79,6 +79,11 @@ JVM_CFLAGS_TARGET_DEFINES += \
+     -DHOTSPOT_LIB_ARCH='"$(OPENJDK_TARGET_CPU_LEGACY_LIB)"' \
+     #
+ 
++DEB_MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)
++ifneq (,$(DEB_MULTIARCH))
++JVM_CFLAGS_TARGET_DEFINES += -DDEB_MULTIARCH="\"$(DEB_MULTIARCH)\""
++endif
++
+ ifeq ($(DEBUG_LEVEL), release)
+   # For hotspot, release builds differ internally between "optimized" and "product"
+   # in that "optimize" does not define PRODUCT.

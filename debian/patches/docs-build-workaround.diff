@@ -1,0 +1,13 @@
+Index: b/make/Docs.gmk
+===================================================================
+--- a/make/Docs.gmk
++++ b/make/Docs.gmk
+@@ -483,7 +483,7 @@ $(eval $(call SetupApiDocsGeneration, RE
+ JDK_INDEX_HTML := $(DOCS_OUTPUTDIR)/index.html
+ 
+ $(JDK_INDEX_HTML):
+-	$(ECHO) '$(JDK_INDEX_CONTENT)' > $@
++	$(if $(ECHO),$(ECHO),echo) '$(JDK_INDEX_CONTENT)' > $@
+ 
+ JDK_INDEX_TARGETS += $(JDK_INDEX_HTML)
+ 

@@ -1,0 +1,6 @@
+# patches are still applied conditionally
+openjdk-10 source: quilt-build-dep-but-no-series-file
+openjdk-10 source: patch-file-present-but-not-mentioned-in-series
+
+# parts of the test suite, not installed
+openjdk-10 source: source-is-missing

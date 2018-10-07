@@ -1,0 +1,40 @@
+# HG changeset patch
+# User valeriep
+# Date 1529020025 0
+#      Thu Jun 14 23:47:05 2018 +0000
+# Node ID 2386faa7edf87d1c9925abda18410b2dc2e7f844
+# Parent  2e5f8d1ccac8534aaaa110606f1b82d298c063c4
+8203654: Improve cypher state updates
+Reviewed-by: ascarpino
+
+diff -r 2e5f8d1ccac8 -r 2386faa7edf8 src/java.base/share/classes/javax/crypto/Cipher.java
+--- a/src/java.base/share/classes/javax/crypto/Cipher.java	Mon Jun 11 16:30:22 2018 -0700
++++ b/src/java.base/share/classes/javax/crypto/Cipher.java	Thu Jun 14 23:47:05 2018 +0000
+@@ -2739,7 +2739,7 @@
+ 
+         // Input sanity check
+         if ((src == null) || (offset < 0) || (len < 0)
+-                || ((len + offset) > src.length)) {
++                || (len > (src.length - offset))) {
+             throw new IllegalArgumentException("Bad arguments");
+         }
+ 
+diff -r 2e5f8d1ccac8 -r 2386faa7edf8 src/java.base/share/classes/javax/crypto/spec/GCMParameterSpec.java
+--- a/src/java.base/share/classes/javax/crypto/spec/GCMParameterSpec.java	Mon Jun 11 16:30:22 2018 -0700
++++ b/src/java.base/share/classes/javax/crypto/spec/GCMParameterSpec.java	Thu Jun 14 23:47:05 2018 +0000
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -120,7 +120,7 @@
+ 
+         // Input sanity check
+         if ((src == null) ||(len < 0) || (offset < 0)
+-                || ((len + offset) > src.length)) {
++                || (len > (src.length - offset))) {
+             throw new IllegalArgumentException("Invalid buffer arguments");
+         }
+ 
