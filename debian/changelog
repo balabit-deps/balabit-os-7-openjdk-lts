@@ -1,3 +1,10 @@
+openjdk-lts (10.0.2+13-1ubuntu0.18.04.4) bionic-security; urgency=medium
+
+  * debian/patches/sec-webrev-11.0.1-b21-S8211731.patch: apply missing
+    patch from the security update. (LP: #1800792)
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 13 Nov 2018 12:53:39 +0000
+
 openjdk-lts (10.0.2+13-1ubuntu0.18.04.3) bionic-security; urgency=medium
 
   * Security update. Backport security patches from 11.0.1-b12.

@@ -386,6 +386,7 @@ ifneq (,$(filter $(DEB_HOST_ARCH), kfreebsd-amd64 kfreebsd-i386))
 	kfreebsd-support-hotspot.diff
 endif
 
+# security patches from 11.0.1-b12
 COMMON_PATCHES += \
 	sec-webrev-11.0.1-b12-S8194534.patch \
 	sec-webrev-11.0.1-b12-S8195868.patch \
@@ -398,7 +399,8 @@ COMMON_PATCHES += \
 	sec-webrev-11.0.1-b12-S8202613.patch \
 	sec-webrev-11.0.1-b12-S8202936.patch \
 	sec-webrev-11.0.1-b12-S8203654.patch \
-	sec-webrev-11.0.1-b12-S8204497.patch
+	sec-webrev-11.0.1-b12-S8204497.patch \
+	sec-webrev-11.0.1-b21-S8211731.patch
 
 DEFAULT_PATCHES = \
 	$(COMMON_PATCHES) \
