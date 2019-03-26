@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package java.awt;
 
 import java.awt.dnd.DropTarget;
@@ -41,6 +42,7 @@ import java.io.ObjectOutputStream;
 import java.io.ObjectStreamField;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.io.Serializable;
 
 import java.lang.ref.WeakReference;
 import java.security.AccessController;
@@ -1171,10 +1173,10 @@ public class Container extends Component {
     }
 
     @Override
-    boolean updateGraphicsData(GraphicsConfiguration gc) {
+    final boolean updateChildGraphicsData(GraphicsConfiguration gc) {
         checkTreeLock();
 
-        boolean ret = super.updateGraphicsData(gc);
+        boolean ret = false;
 
         for (Component comp : component) {
             if (comp != null) {
@@ -3857,7 +3859,9 @@ public class Container extends Component {
          * @since 1.3
          */
         protected class AccessibleContainerHandler
-            implements ContainerListener {
+            implements ContainerListener, Serializable {
+            private static final long serialVersionUID = -480855353991814677L;
+
             public void componentAdded(ContainerEvent e) {
                 Component c = e.getChild();
                 if (c != null && c instanceof Accessible) {

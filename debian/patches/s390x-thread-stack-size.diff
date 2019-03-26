@@ -18,7 +18,7 @@ Index: b/make/autoconf/boot-jdk.m4
 ===================================================================
 --- a/make/autoconf/boot-jdk.m4
 +++ b/make/autoconf/boot-jdk.m4
-@@ -405,6 +405,9 @@ AC_DEFUN_ONCE([BOOTJDK_SETUP_BOOT_JDK_AR
+@@ -431,6 +431,9 @@ AC_DEFUN_ONCE([BOOTJDK_SETUP_BOOT_JDK_AR
    fi
    ADD_JVM_ARG_IF_OK([-Xmx${JVM_MAX_HEAP}M],boot_jdk_jvmargs_big,[$JAVA])
    ADD_JVM_ARG_IF_OK([-XX:ThreadStackSize=$STACK_SIZE],boot_jdk_jvmargs_big,[$JAVA])
@@ -28,7 +28,7 @@ Index: b/make/autoconf/boot-jdk.m4
  
    AC_MSG_RESULT([$boot_jdk_jvmargs_big])
  
-@@ -434,6 +437,9 @@ AC_DEFUN_ONCE([BOOTJDK_SETUP_BOOT_JDK_AR
+@@ -460,6 +463,9 @@ AC_DEFUN_ONCE([BOOTJDK_SETUP_BOOT_JDK_AR
    ADD_JVM_ARG_IF_OK([-XX:+UseSerialGC],boot_jdk_jvmargs_small,[$JAVA])
    ADD_JVM_ARG_IF_OK([-Xms32M],boot_jdk_jvmargs_small,[$JAVA])
    ADD_JVM_ARG_IF_OK([-Xmx512M],boot_jdk_jvmargs_small,[$JAVA])

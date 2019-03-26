@@ -1,8 +1,6 @@
-Index: b/src/java.base/share/native/libjli/java.c
-===================================================================
 --- a/src/java.base/share/native/libjli/java.c
 +++ b/src/java.base/share/native/libjli/java.c
-@@ -2032,7 +2032,7 @@ jint
+@@ -2067,7 +2067,7 @@ jint
  ReadKnownVMs(const char *jvmCfgName, jboolean speculative)
  {
      FILE *jvmCfg;
@@ -11,7 +9,7 @@ Index: b/src/java.base/share/native/libjli/java.c
      int cnt = 0;
      int lineno = 0;
      jlong start, end;
-@@ -2047,6 +2047,11 @@ ReadKnownVMs(const char *jvmCfgName, jbo
+@@ -2082,6 +2082,11 @@ ReadKnownVMs(const char *jvmCfgName, jbo
  
      jvmCfg = fopen(jvmCfgName, "r");
      if (jvmCfg == NULL) {

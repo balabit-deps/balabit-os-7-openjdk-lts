@@ -1,4 +1,5 @@
 repo: fd16c54261b32be1aaedd863b7e856801b7f8543
-node: 45b1d041a4ef0c20fd82635109231ce5613ec057
+node: 144d476b6efe527c5e9ebf19af93398913c5450f
 branch: default
-tag: jdk-10.0.2+13
+tag: jdk-11.0.2+9
+tag: jdk-11.0.2-ga

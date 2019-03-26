@@ -1,24 +1,8 @@
-Index: b/make/gensrc/GensrcX11Wrappers.gmk
-===================================================================
---- a/make/gensrc/GensrcX11Wrappers.gmk
-+++ b/make/gensrc/GensrcX11Wrappers.gmk
-@@ -91,9 +91,11 @@ ifneq ($(COMPILE_TYPE), cross)
- 	$(TOOL_WRAPPERGENERATOR) $(@D) $(GENSRC_SIZER_DIR)/xlibtypes.txt "sizer" $*
- 
-   # use -m32/-m64 only if the compiler supports it
-+  ifneq ($(OPENJDK_TARGET_CPU),x32)
-   ifeq ($(COMPILER_SUPPORTS_TARGET_BITS_FLAG), true)
-     MEMORY_MODEL_FLAG="$(COMPILER_TARGET_BITS_FLAG)$*"
-   endif
-+  endif
- 
-   SIZER_CFLAGS := \
-       -I${TOPDIR}/src/hotspot/share/include \
 Index: b/src/hotspot/os/linux/os_linux.cpp
 ===================================================================
 --- a/src/hotspot/os/linux/os_linux.cpp
 +++ b/src/hotspot/os/linux/os_linux.cpp
-@@ -1766,7 +1766,7 @@ void * os::dll_load(const char *filename
+@@ -1757,7 +1757,7 @@ void * os::dll_load(const char *filename
  
  #if  (defined IA32)
    static  Elf32_Half running_arch_code=EM_386;

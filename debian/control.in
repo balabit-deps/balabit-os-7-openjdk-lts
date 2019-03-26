@@ -4,9 +4,11 @@ Priority: optional
 Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 XSBC-Original-Maintainer: OpenJDK Team <openjdk@lists.launchpad.net>
 Uploaders: Matthias Klose <doko@ubuntu.com>
-Build-Depends: debhelper (>= 9.20141010), dpkg-dev (>= 1.17.14),
-  quilt, m4, lsb-release, zip, unzip,
+Build-Depends: @bd_debhelper@
+  m4, lsb-release, zip, unzip,
   sharutils, gawk, cpio, pkg-config, procps, wdiff, @bd_fastjar@
+  jtreg, testng, time,
+  xvfb, xauth, xfonts-base, libgl1-mesa-dri [!x32], xfwm4, x11-xkb-utils, dbus-x11,
   @bd_autotools@ @bd_ant@
   @bd_gcc@
   @bd_bootstrap@
@@ -14,14 +16,12 @@ Build-Depends: debhelper (>= 9.20141010), dpkg-dev (>= 1.17.14),
   @bd_zero@
   @bd_syslibs@ @bd_pulsejava@ @bd_systemtap@
   @bd_nss@
-  @bd_jtreg@ @bd_xvfb@
-  time, @bd_cross@
-  testng, libguava-java,
+  @bd_cross@
 Build-Depends-Indep: graphviz, pandoc,
-Standards-Version: 4.1.5
+Standards-Version: 4.3.0
 Homepage: http://openjdk.java.net/
-Vcs-Bzr: http://bazaar.launchpad.net/~openjdk/openjdk/openjdk9
-Vcs-Browser: https://code.launchpad.net/~openjdk/openjdk/openjdk9
+Vcs-Git: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk -b openjdk-11
+Vcs-Browser: https://code.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk/+ref/openjdk-11
 
 Package: @basename@-jdk-headless
 Architecture: @any_archs@
@@ -34,7 +34,9 @@ Provides: java-sdk-headless, java2-sdk-headless,
   java5-sdk-headless, java6-sdk-headless,
   java7-sdk-headless, java8-sdk-headless,
   java9-sdk-headless, java10-sdk-headless,
-  java-compiler
+  java11-sdk-headless, java-compiler
+Conflicts: openjdk-11-jre-headless (<< 11~19-2)
+Replaces: openjdk-11-jre-headless (<< 11~19-2)
 Description: OpenJDK Development Kit (JDK) (headless)
  OpenJDK is a development environment for building applications,
  applets, and components using the Java programming language.
@@ -55,8 +57,11 @@ Provides: java-runtime-headless, java2-runtime-headless,
   java5-runtime-headless, java6-runtime-headless,
   java7-runtime-headless, java8-runtime-headless,
   java9-runtime-headless, java10-runtime-headless,
+  java11-runtime-headless,
   ${defaultvm:Provides}, ${jvm:Provides}
-Conflicts: oracle-java10-installer
+Breaks: clojure1.8 (<= 1.8.0-7ubuntu1~), jetty9 (<< 9.4.15-1~), netbeans (<< 10.0-3~), tomcat8 (<< 8.5.39-1ubuntu1~), visualvm (<< 1.4.2-2~)
+Conflicts: oracle-java11-installer, openjdk-11-jdk-headless (<< 11~18-2)
+Replaces: openjdk-11-jdk-headless (<< 11~18-2)
 Description: OpenJDK Java runtime, using ${vm:Name} (headless)
  Minimal Java runtime - needed for executing non GUI Java programs,
  using ${vm:Name}.
@@ -71,7 +76,10 @@ Depends: @basename@-jre (= ${binary:Version}),
 Recommends: libxt-dev
 Suggests: @basename@-demo, @basename@-source, visualvm
 Provides: java-sdk, java2-sdk, java5-sdk, java6-sdk,
-  java7-sdk, java8-sdk, java9-sdk, java10-sdk, java-compiler
+  java7-sdk, java8-sdk, java9-sdk, java10-sdk, java11-sdk,
+  java-compiler
+Conflicts: openjdk-11-jre-headless (<< 11~19-2)
+Replaces: openjdk-11-jre-headless (<< 11~19-2)
 Description: OpenJDK Development Kit (JDK)
  OpenJDK is a development environment for building applications,
  applets, and components using the Java programming language.
@@ -89,6 +97,7 @@ Provides: java-runtime, java2-runtime,
   java5-runtime, java6-runtime,
   java7-runtime, java8-runtime,
   java9-runtime, java10-runtime,
+  java11-runtime,
 Description: OpenJDK Java runtime, using ${vm:Name}
  Full Java runtime environment - needed for executing Java GUI and Webstart
  programs, using ${vm:Name}.
@@ -119,6 +128,7 @@ Package: @basename@-doc
 Section: doc
 Pre-Depends: ${dpkg:Depends}
 Architecture: all
+Multi-Arch: foreign
 Priority: optional
 Depends: ${misc:Depends}
 Suggests: @basename@-jdk

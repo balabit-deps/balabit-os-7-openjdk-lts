@@ -1,14 +1,13 @@
 # HG changeset patch
-# User John Paul Adrian Glaubitz <glaubitz@physik.fu-berlin.de>
-# Date 1512049131 -3600
-#      Thu Nov 30 14:38:51 2017 +0100
-# Node ID 51758c6896cf6d4722754f1c11adf668f894b9f1
-# Parent  c54d8eb70311ed092fe85ba3456e77f82f589862
+# User glaubitz
+# Date 1532184301 -7200
+#      Sat Jul 21 16:45:01 2018 +0200
+# Node ID 418a697aef91a730b942129d5d41b6c68a871cd8
+# Parent  b0fcf59be3918afcaa13d1f97343968c2c467ffe
 JDK-NNNNNNN: Zero needs alignment fixes for linux-m68k
 
-diff -r c54d8eb70311 -r 51758c6896cf make/data/x11wrappergen/sizes.32-linux-m68k
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ b/make/data/x11wrappergen/sizes.32-linux-m68k	Thu Nov 30 14:38:51 2017 +0100
+--- /dev/null
++++ b/make/data/x11wrappergen/sizes-32-linux-m68k.txt
 @@ -0,0 +1,1017 @@
 +long	4
 +int	4
@@ -1027,58 +1026,54 @@ diff -r c54d8eb70311 -r 51758c6896cf make/data/x11wrappergen/sizes.32-linux-m68k
 +XTextProperty.format	8
 +XTextProperty.nitems	12
 +XTextProperty	16
-diff -r c54d8eb70311 -r 51758c6896cf make/gensrc/GensrcX11Wrappers.gmk
---- a/make/gensrc/GensrcX11Wrappers.gmk	Wed Nov 29 23:23:34 2017 +0100
-+++ b/make/gensrc/GensrcX11Wrappers.gmk	Thu Nov 30 14:38:51 2017 +0100
-@@ -57,12 +57,16 @@
-     GENSRC_X11_VERSION := 32 64
-   endif
- endif
+--- a/make/gensrc/GensrcX11Wrappers.gmk
++++ b/make/gensrc/GensrcX11Wrappers.gmk
+@@ -33,9 +33,14 @@ GENSRC_X11WRAPPERS_MARKER := $(GENSRC_X1
+ # Put the generated Java classes used to interface X11 from awt here.
+ GENSRC_X11WRAPPERS_OUTPUTDIR := $(GENSRC_X11WRAPPERS_OUTPUT_TOP)/sun/awt/X11
+ 
 +GENSRC_X11_VERSION_VARIANT :=
 +ifeq ($(OPENJDK_TARGET_OS)-$(OPENJDK_TARGET_CPU), linux-m68k)
 +  GENSRC_X11_VERSION_VARIANT := -linux-m68k
 +endif
++
+ # The pre-calculated offset file are stored here:
+ GENSRC_X11WRAPPERS_DATADIR := $(TOPDIR)/make/data/x11wrappergen
+-GENSRC_X11WRAPPERS_DATA := $(GENSRC_X11WRAPPERS_DATADIR)/sizes-$(OPENJDK_TARGET_CPU_BITS).txt
++GENSRC_X11WRAPPERS_DATA := $(GENSRC_X11WRAPPERS_DATADIR)/sizes-$(OPENJDK_TARGET_CPU_BITS)$(GENSRC_X11_VERSION_VARIANT).txt
  
- GENSRC_X11_SIZES_USED := $(addprefix $(GENSRC_X11WRAPPERS_TMP)/sizes., $(GENSRC_X11_VERSION))
+ # Run the tool on the offset files to generate several Java classes used in awt.
+ $(GENSRC_X11WRAPPERS_MARKER): $(BUILD_TOOLS_JDK) $(GENSRC_X11WRAPPERS_DATA) \
+--- a/src/hotspot/share/memory/allocation.hpp
++++ b/src/hotspot/share/memory/allocation.hpp
+@@ -209,7 +209,7 @@ template <MEMFLAGS F> class CHeapObj ALL
  
- # Copy only the sizes.* files that are actually needed. WrapperGenerator picks up any it finds from the
- # file prefix it is given so those not needed need to be hidden.
--$(GENSRC_X11WRAPPERS_TMP)/sizes.%: $(GENSRC_SIZER_DIR)/sizes.%
-+$(GENSRC_X11WRAPPERS_TMP)/sizes.%: $(GENSRC_SIZER_DIR)/sizes.%$(GENSRC_X11_VERSION_VARIANT)
- 	$(call MakeDir, $(@D))
- 	$(RM) '$@'
- 	$(SORT) $< > $@
-diff -r c54d8eb70311 -r 51758c6896cf src/hotspot/share/memory/allocation.hpp
---- a/src/hotspot/share/memory/allocation.hpp	Wed Nov 29 23:23:34 2017 +0100
-+++ b/src/hotspot/share/memory/allocation.hpp	Thu Nov 30 14:38:51 2017 +0100
-@@ -172,7 +172,7 @@
-                                throw();
-   void  operator delete(void* p);
-   void  operator delete [] (void* p);
+   void  operator delete(void* p)     { FreeHeap(p); }
+   void  operator delete [] (void* p) { FreeHeap(p); }
 -};
 +} __attribute__ ((aligned (4)));
  
  // Base class for objects allocated on the stack only.
  // Calling new or delete will result in fatal error.
-@@ -186,7 +186,7 @@
+@@ -223,7 +223,7 @@ class StackObj ALLOCATION_SUPER_CLASS_SP
  #endif
    void  operator delete(void* p);
    void  operator delete [](void* p);
 -};
 +} __attribute__ ((aligned (4)));
  
- // Base class for objects used as value objects.
- // Calling new or delete will result in fatal error.
-@@ -212,7 +212,7 @@
-   void  operator delete(void* p);
-   void* operator new [](size_t size) throw();
-   void  operator delete [](void* p);
+ // Base class for objects stored in Metaspace.
+ // Calling delete will result in fatal error.
+@@ -311,7 +311,7 @@ class MetaspaceObj {
+   // that should be read-only by default. See symbol.hpp for an example. This function
+   // is used by the templates in metaspaceClosure.hpp
+   static bool is_read_only_by_default() { return false; }
 -};
 +} __attribute__ ((aligned (4)));
  
+ // Base class for classes that constitute name spaces.
  
- // Base class for objects stored in Metaspace.
-@@ -377,7 +377,7 @@
+@@ -401,7 +401,7 @@ class ResourceObj ALLOCATION_SUPER_CLASS
  
    void  operator delete(void* p);
    void  operator delete [](void* p);
@@ -1087,10 +1082,9 @@ diff -r c54d8eb70311 -r 51758c6896cf src/hotspot/share/memory/allocation.hpp
  
  // One of the following macros must be used when allocating an array
  // or object to determine whether it should reside in the C heap on in
-diff -r c54d8eb70311 -r 51758c6896cf src/hotspot/share/oops/constMethod.hpp
---- a/src/hotspot/share/oops/constMethod.hpp	Wed Nov 29 23:23:34 2017 +0100
-+++ b/src/hotspot/share/oops/constMethod.hpp	Thu Nov 30 14:38:51 2017 +0100
-@@ -559,6 +559,6 @@
+--- a/src/hotspot/share/oops/constMethod.hpp
++++ b/src/hotspot/share/oops/constMethod.hpp
+@@ -559,6 +559,6 @@ private:
  
    // Verify
    void verify_on(outputStream* st);
@@ -1098,21 +1092,19 @@ diff -r c54d8eb70311 -r 51758c6896cf src/hotspot/share/oops/constMethod.hpp
 +} __attribute__ ((aligned (4)));
  
  #endif // SHARE_VM_OOPS_CONSTMETHODOOP_HPP
-diff -r c54d8eb70311 -r 51758c6896cf src/hotspot/share/oops/oop.hpp
---- a/src/hotspot/share/oops/oop.hpp	Wed Nov 29 23:23:34 2017 +0100
-+++ b/src/hotspot/share/oops/oop.hpp	Thu Nov 30 14:38:51 2017 +0100
-@@ -369,6 +369,6 @@
-   }
- 
-   static bool is_archive_object(oop p) NOT_CDS_JAVA_HEAP_RETURN_(false);
+--- a/src/hotspot/share/oops/oop.hpp
++++ b/src/hotspot/share/oops/oop.hpp
+@@ -338,6 +338,6 @@ class oopDesc {
+   static void* load_oop_raw(oop obj, int offset);
+   static bool  is_valid(oop obj);
+   static oop   oop_or_null(address addr);
 -};
 +} __attribute__ ((aligned (4)));
  
  #endif // SHARE_VM_OOPS_OOP_HPP
-diff -r c54d8eb70311 -r 51758c6896cf src/java.base/unix/native/libjli/java_md_solinux.c
---- a/src/java.base/unix/native/libjli/java_md_solinux.c	Wed Nov 29 23:23:34 2017 +0100
-+++ b/src/java.base/unix/native/libjli/java_md_solinux.c	Thu Nov 30 14:38:51 2017 +0100
-@@ -727,12 +727,24 @@
+--- a/src/java.base/unix/native/libjli/java_md_solinux.c
++++ b/src/java.base/unix/native/libjli/java_md_solinux.c
+@@ -727,12 +727,24 @@ void SplashFreeLibrary() {
      }
  }
  
@@ -1137,7 +1129,7 @@ diff -r c54d8eb70311 -r 51758c6896cf src/java.base/unix/native/libjli/java_md_so
  #ifndef __solaris__
      pthread_t tid;
      pthread_attr_t attr;
-@@ -744,7 +756,7 @@
+@@ -744,7 +756,7 @@ ContinueInNewThread0(int (JNICALL *conti
      }
      pthread_attr_setguardsize(&attr, 0); // no pthread guard page on java threads
  
@@ -1146,7 +1138,7 @@ diff -r c54d8eb70311 -r 51758c6896cf src/java.base/unix/native/libjli/java_md_so
        void * tmp;
        pthread_join(tid, &tmp);
        rslt = (int)(intptr_t)tmp;
-@@ -762,7 +774,7 @@
+@@ -762,7 +774,7 @@ ContinueInNewThread0(int (JNICALL *conti
  #else /* __solaris__ */
      thread_t tid;
      long flags = 0;

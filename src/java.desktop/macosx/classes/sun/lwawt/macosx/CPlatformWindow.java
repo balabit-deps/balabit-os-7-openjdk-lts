@@ -382,8 +382,6 @@ public class CPlatformWindow extends CFRetainedResource implements PlatformWindo
             styleBits = SET(styleBits, RESIZABLE, resizable);
             if (!resizable) {
                 styleBits = SET(styleBits, ZOOMABLE, false);
-            } else {
-                setCanFullscreen(true);
             }
         }
 
@@ -677,6 +675,15 @@ public class CPlatformWindow extends CFRetainedResource implements PlatformWindo
 
         // Manage the extended state when showing
         if (visible) {
+            /* Frame or Dialog should be set property WINDOW_FULLSCREENABLE to true if the
+            Frame or Dialog is resizable.
+            **/
+            final boolean resizable = (target instanceof Frame) ? ((Frame)target).isResizable() :
+            ((target instanceof Dialog) ? ((Dialog)target).isResizable() : false);
+            if (resizable) {
+                setCanFullscreen(true);
+            }
+
             // Apply the extended state as expected in shared code
             if (target instanceof Frame) {
                 if (!wasMaximized && isMaximized()) {
@@ -1198,17 +1205,27 @@ public class CPlatformWindow extends CFRetainedResource implements PlatformWindo
     }
 
     private void orderAboveSiblings() {
-        // Recursively pop up the windows from the very bottom, (i.e. root owner) so that
-        // the windows are ordered above their nearest owner; ancestors of the window,
-        // which is going to become 'main window', are placed above their siblings.
         CPlatformWindow rootOwner = getRootOwner();
-        if (rootOwner.isVisible() && !rootOwner.isIconified()) {
-            rootOwner.execute(CWrapper.NSWindow::orderFront);
-        }
+
         // Do not order child windows of iconified owner.
         if (!rootOwner.isIconified()) {
             final WindowAccessor windowAccessor = AWTAccessor.getWindowAccessor();
-            orderAboveSiblingsImpl(windowAccessor.getOwnedWindows(rootOwner.target));
+            Window[] windows = windowAccessor.getOwnedWindows(rootOwner.target);
+
+            // No need to order windows if it doesn't own other windows and hence return
+            if (windows.length == 0) {
+                return;
+            }
+
+            // Recursively pop up the windows from the very bottom, (i.e. root owner) so that
+            // the windows are ordered above their nearest owner; ancestors of the window,
+            // which is going to become 'main window', are placed above their siblings.
+            if (rootOwner.isVisible()) {
+                rootOwner.execute(CWrapper.NSWindow::orderFront);
+            }
+
+            // Order child windows.
+            orderAboveSiblingsImpl(windows);
         }
     }
 
@@ -1267,6 +1284,21 @@ public class CPlatformWindow extends CFRetainedResource implements PlatformWindo
         } else if (target.getType() == Window.Type.POPUP) {
             execute(ptr->CWrapper.NSWindow.setLevel(ptr, CWrapper.NSWindow.NSPopUpMenuWindowLevel));
         }
+    }
+
+    private Window getOwnerFrameOrDialog(Window window) {
+        Window owner = window.getOwner();
+        while(owner != null && !(owner instanceof Frame || owner instanceof Dialog)) {
+            owner = owner.getOwner();
+        }
+        return owner;
+    }
+
+    private boolean isSimpleWindowOwnedByEmbeddedFrame() {
+        if (peer != null && peer.isSimpleWindow()) {
+            return (getOwnerFrameOrDialog(target) instanceof CEmbeddedFrame);
+        }
+        return false;
     }
 
     // ----------------------------------------------------------------------

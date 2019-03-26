@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,15 +27,18 @@
 #include "asm/assembler.hpp"
 #include "asm/assembler.inline.hpp"
 #include "compiler/disassembler.hpp"
-#include "gc/shared/cardTableModRefBS.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "interpreter/interpreter.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
+#include "oops/accessDecorators.hpp"
 #include "oops/klass.inline.hpp"
 #include "prims/methodHandles.hpp"
 #include "runtime/biasedLocking.hpp"
-#include "runtime/interfaceSupport.hpp"
+#include "runtime/flags/flagSetting.hpp"
+#include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/os.hpp"
 #include "runtime/safepoint.hpp"
@@ -44,11 +47,6 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.hpp"
 #include "utilities/macros.hpp"
-#if INCLUDE_ALL_GCS
-#include "gc/g1/g1CollectedHeap.inline.hpp"
-#include "gc/g1/g1SATBCardTableModRefBS.hpp"
-#include "gc/g1/heapRegion.hpp"
-#endif // INCLUDE_ALL_GCS
 #include "crc32c.h"
 #ifdef COMPILER2
 #include "opto/intrinsicnode.hpp"
@@ -120,12 +118,22 @@ void MacroAssembler::cmpklass(Register src1, Metadata* obj) {
   cmp_literal32(src1, (int32_t)obj, metadata_Relocation::spec_for_immediate());
 }
 
-void MacroAssembler::cmpoop(Address src1, jobject obj) {
+void MacroAssembler::cmpoop_raw(Address src1, jobject obj) {
   cmp_literal32(src1, (int32_t)obj, oop_Relocation::spec_for_immediate());
 }
 
-void MacroAssembler::cmpoop(Register src1, jobject obj) {
+void MacroAssembler::cmpoop_raw(Register src1, jobject obj) {
   cmp_literal32(src1, (int32_t)obj, oop_Relocation::spec_for_immediate());
+}
+
+void MacroAssembler::cmpoop(Address src1, jobject obj) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->obj_equals(this, src1, obj);
+}
+
+void MacroAssembler::cmpoop(Register src1, jobject obj) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->obj_equals(this, src1, obj);
 }
 
 void MacroAssembler::extend_sign(Register hi, Register lo) {
@@ -836,7 +844,8 @@ void MacroAssembler::warn(const char* msg) {
   andq(rsp, -16);     // align stack as required by push_CPU_state and call
   push_CPU_state();   // keeps alignment at 16 bytes
   lea(c_rarg0, ExternalAddress((address) msg));
-  call_VM_leaf(CAST_FROM_FN_PTR(address, warning), c_rarg0);
+  lea(rax, ExternalAddress(CAST_FROM_FN_PTR(address, warning)));
+  call(rax);
   pop_CPU_state();
   mov(rsp, rbp);
   pop(rbp);
@@ -2786,17 +2795,20 @@ void MacroAssembler::cmpptr(Address src1, AddressLiteral src2) {
 }
 
 void MacroAssembler::cmpoop(Register src1, Register src2) {
-  cmpptr(src1, src2);
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->obj_equals(this, src1, src2);
 }
 
 void MacroAssembler::cmpoop(Register src1, Address src2) {
-  cmpptr(src1, src2);
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->obj_equals(this, src1, src2);
 }
 
 #ifdef _LP64
 void MacroAssembler::cmpoop(Register src1, jobject src2) {
   movoop(rscratch1, src2);
-  cmpptr(src1, rscratch1);
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->obj_equals(this, src1, rscratch1);
 }
 #endif
 
@@ -2946,40 +2958,6 @@ void MacroAssembler::empty_FPU_stack() {
 }
 #endif // !LP64 || C1 || !C2 || INCLUDE_JVMCI
 
-
-// Defines obj, preserves var_size_in_bytes
-void MacroAssembler::eden_allocate(Register obj,
-                                   Register var_size_in_bytes,
-                                   int con_size_in_bytes,
-                                   Register t1,
-                                   Label& slow_case) {
-  assert(obj == rax, "obj must be in rax, for cmpxchg");
-  assert_different_registers(obj, var_size_in_bytes, t1);
-  if (!Universe::heap()->supports_inline_contig_alloc()) {
-    jmp(slow_case);
-  } else {
-    Register end = t1;
-    Label retry;
-    bind(retry);
-    ExternalAddress heap_top((address) Universe::heap()->top_addr());
-    movptr(obj, heap_top);
-    if (var_size_in_bytes == noreg) {
-      lea(end, Address(obj, con_size_in_bytes));
-    } else {
-      lea(end, Address(obj, var_size_in_bytes, Address::times_1));
-    }
-    // if end < obj then we wrapped around => object too long => slow case
-    cmpptr(end, obj);
-    jcc(Assembler::below, slow_case);
-    cmpptr(end, ExternalAddress((address) Universe::heap()->end_addr()));
-    jcc(Assembler::above, slow_case);
-    // Compare obj with the top addr, and if still equal, store the new top addr in
-    // end at the address of the top addr pointer. Sets ZF if was equal, and clears
-    // it otherwise. Use lock prefix for atomicity on MPs.
-    locked_cmpxchgptr(end, heap_top);
-    jcc(Assembler::notEqual, retry);
-  }
-}
 
 void MacroAssembler::enter() {
   push(rbp);
@@ -3469,7 +3447,9 @@ void MacroAssembler::movq(XMMRegister dst, AddressLiteral src) {
   }
 }
 
+#ifdef COMPILER2
 void MacroAssembler::setvectmask(Register dst, Register src) {
+  guarantee(PostLoopMultiversioning, "must be");
   Assembler::movl(dst, 1);
   Assembler::shlxl(dst, dst, src);
   Assembler::decl(dst);
@@ -3478,8 +3458,10 @@ void MacroAssembler::setvectmask(Register dst, Register src) {
 }
 
 void MacroAssembler::restorevectmask() {
+  guarantee(PostLoopMultiversioning, "must be");
   Assembler::knotwl(k1, k0);
 }
+#endif // COMPILER2
 
 void MacroAssembler::movdbl(XMMRegister dst, AddressLiteral src) {
   if (reachable(src)) {
@@ -3525,27 +3507,18 @@ void MacroAssembler::movptr(Address dst, Register src) {
 }
 
 void MacroAssembler::movdqu(Address dst, XMMRegister src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl() && (src->encoding() > 15)) {
-    Assembler::vextractf32x4(dst, src, 0);
-  } else {
+    assert(((src->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::movdqu(dst, src);
-  }
 }
 
 void MacroAssembler::movdqu(XMMRegister dst, Address src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl() && (dst->encoding() > 15)) {
-    Assembler::vinsertf32x4(dst, dst, src, 0);
-  } else {
+    assert(((dst->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::movdqu(dst, src);
-  }
 }
 
 void MacroAssembler::movdqu(XMMRegister dst, XMMRegister src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl()) {
-    Assembler::evmovdqul(dst, src, Assembler::AVX_512bit);
-  } else {
+    assert(((dst->encoding() < 16  && src->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::movdqu(dst, src);
-  }
 }
 
 void MacroAssembler::movdqu(XMMRegister dst, AddressLiteral src, Register scratchReg) {
@@ -3558,28 +3531,18 @@ void MacroAssembler::movdqu(XMMRegister dst, AddressLiteral src, Register scratc
 }
 
 void MacroAssembler::vmovdqu(Address dst, XMMRegister src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl() && (src->encoding() > 15)) {
-    vextractf64x4_low(dst, src);
-  } else {
+    assert(((src->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::vmovdqu(dst, src);
-  }
 }
 
 void MacroAssembler::vmovdqu(XMMRegister dst, Address src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl() && (dst->encoding() > 15)) {
-    vinsertf64x4_low(dst, src);
-  } else {
+    assert(((dst->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::vmovdqu(dst, src);
-  }
 }
 
 void MacroAssembler::vmovdqu(XMMRegister dst, XMMRegister src) {
-  if (UseAVX > 2 && !VM_Version::supports_avx512vl()) {
-    Assembler::evmovdqul(dst, src, Assembler::AVX_512bit);
-  }
-  else {
+    assert(((dst->encoding() < 16  && src->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
     Assembler::vmovdqu(dst, src);
-  }
 }
 
 void MacroAssembler::vmovdqu(XMMRegister dst, AddressLiteral src) {
@@ -3589,6 +3552,15 @@ void MacroAssembler::vmovdqu(XMMRegister dst, AddressLiteral src) {
   else {
     lea(rscratch1, src);
     vmovdqu(dst, Address(rscratch1, 0));
+  }
+}
+
+void MacroAssembler::evmovdquq(XMMRegister dst, AddressLiteral src, int vector_len, Register rscratch) {
+  if (reachable(src)) {
+    Assembler::evmovdquq(dst, as_Address(src), vector_len);
+  } else {
+    lea(rscratch, src);
+    Assembler::evmovdquq(dst, Address(rscratch, 0), vector_len);
   }
 }
 
@@ -3659,9 +3631,14 @@ void MacroAssembler::os_breakpoint() {
 }
 
 void MacroAssembler::unimplemented(const char* what) {
-  char* b = new char[1024];
-  jio_snprintf(b, 1024, "unimplemented: %s", what);
-  stop(b);
+  const char* buf = NULL;
+  {
+    ResourceMark rm;
+    stringStream ss;
+    ss.print("unimplemented: %s", what);
+    buf = code_string(ss.as_string());
+  }
+  stop(buf);
 }
 
 #ifdef _LP64
@@ -3761,10 +3738,17 @@ void MacroAssembler::serialize_memory(Register thread, Register tmp) {
   movl(as_Address(ArrayAddress(page, index)), tmp);
 }
 
-#ifdef _LP64
 void MacroAssembler::safepoint_poll(Label& slow_path, Register thread_reg, Register temp_reg) {
   if (SafepointMechanism::uses_thread_local_poll()) {
-    testb(Address(r15_thread, Thread::polling_page_offset()), SafepointMechanism::poll_bit());
+#ifdef _LP64
+    assert(thread_reg == r15_thread, "should be");
+#else
+    if (thread_reg == noreg) {
+      thread_reg = temp_reg;
+      get_thread(thread_reg);
+    }
+#endif
+    testb(Address(thread_reg, Thread::polling_page_offset()), SafepointMechanism::poll_bit());
     jcc(Assembler::notZero, slow_path); // handshake bit set implies poll
   } else {
     cmp32(ExternalAddress(SafepointSynchronize::address_of_state()),
@@ -3772,13 +3756,6 @@ void MacroAssembler::safepoint_poll(Label& slow_path, Register thread_reg, Regis
     jcc(Assembler::notEqual, slow_path);
   }
 }
-#else
-void MacroAssembler::safepoint_poll(Label& slow_path) {
-  cmp32(ExternalAddress(SafepointSynchronize::address_of_state()),
-      SafepointSynchronize::_not_synchronized);
-  jcc(Assembler::notEqual, slow_path);
-}
-#endif
 
 // Calls to C land
 //
@@ -3849,233 +3826,43 @@ void MacroAssembler::testl(Register dst, AddressLiteral src) {
 }
 
 void MacroAssembler::pcmpeqb(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::pcmpeqb(dst, src);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::pcmpeqb(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pcmpeqb(xmm0, src);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::pcmpeqb(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::pcmpeqb(xmm1, xmm0);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::pcmpeqb(dst, src);
 }
 
 void MacroAssembler::pcmpeqw(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::pcmpeqw(dst, src);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::pcmpeqw(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pcmpeqw(xmm0, src);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::pcmpeqw(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::pcmpeqw(xmm1, xmm0);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::pcmpeqw(dst, src);
 }
 
 void MacroAssembler::pcmpestri(XMMRegister dst, Address src, int imm8) {
-  int dst_enc = dst->encoding();
-  if (dst_enc < 16) {
-    Assembler::pcmpestri(dst, src, imm8);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pcmpestri(xmm0, src, imm8);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((dst->encoding() < 16),"XMM register should be 0-15");
+  Assembler::pcmpestri(dst, src, imm8);
 }
 
 void MacroAssembler::pcmpestri(XMMRegister dst, XMMRegister src, int imm8) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::pcmpestri(dst, src, imm8);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pcmpestri(xmm0, src, imm8);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::pcmpestri(dst, xmm0, imm8);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::pcmpestri(xmm1, xmm0, imm8);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((dst->encoding() < 16 && src->encoding() < 16),"XMM register should be 0-15");
+  Assembler::pcmpestri(dst, src, imm8);
 }
 
 void MacroAssembler::pmovzxbw(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::pmovzxbw(dst, src);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::pmovzxbw(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pmovzxbw(xmm0, src);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::pmovzxbw(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::pmovzxbw(xmm1, xmm0);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::pmovzxbw(dst, src);
 }
 
 void MacroAssembler::pmovzxbw(XMMRegister dst, Address src) {
-  int dst_enc = dst->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::pmovzxbw(dst, src);
-  } else if (dst_enc < 16) {
-    Assembler::pmovzxbw(dst, src);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::pmovzxbw(xmm0, src);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::pmovzxbw(dst, src);
 }
 
 void MacroAssembler::pmovmskb(Register dst, XMMRegister src) {
-  int src_enc = src->encoding();
-  if (src_enc < 16) {
-    Assembler::pmovmskb(dst, src);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::pmovmskb(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((src->encoding() < 16),"XMM register should be 0-15");
+  Assembler::pmovmskb(dst, src);
 }
 
 void MacroAssembler::ptest(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::ptest(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::ptest(xmm0, src);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::ptest(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::ptest(xmm1, xmm0);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((dst->encoding() < 16 && src->encoding() < 16),"XMM register should be 0-15");
+  Assembler::ptest(dst, src);
 }
 
 void MacroAssembler::sqrtsd(XMMRegister dst, AddressLiteral src) {
@@ -4204,195 +3991,33 @@ void MacroAssembler::vaddss(XMMRegister dst, XMMRegister nds, AddressLiteral src
 }
 
 void MacroAssembler::vabsss(XMMRegister dst, XMMRegister nds, XMMRegister src, AddressLiteral negate_field, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if ((dst_enc < 16) && (nds_enc < 16)) {
-    vandps(dst, nds, negate_field, vector_len);
-  } else if ((src_enc < 16) && (dst_enc < 16)) {
-    evmovdqul(src, nds, Assembler::AVX_512bit);
-    vandps(dst, src, negate_field, vector_len);
-  } else if (src_enc < 16) {
-    evmovdqul(src, nds, Assembler::AVX_512bit);
-    vandps(src, src, negate_field, vector_len);
-    evmovdqul(dst, src, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    evmovdqul(src, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    vandps(dst, xmm0, negate_field, vector_len);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-  } else {
-    if (src_enc != dst_enc) {
-      evmovdqul(src, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-      vandps(xmm0, xmm0, negate_field, vector_len);
-      evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    } else {
-      subptr(rsp, 64);
-      evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-      vandps(xmm0, xmm0, negate_field, vector_len);
-      evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-      addptr(rsp, 64);
-    }
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vldq()),"XMM register should be 0-15");
+  vandps(dst, nds, negate_field, vector_len);
 }
 
 void MacroAssembler::vabssd(XMMRegister dst, XMMRegister nds, XMMRegister src, AddressLiteral negate_field, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if ((dst_enc < 16) && (nds_enc < 16)) {
-    vandpd(dst, nds, negate_field, vector_len);
-  } else if ((src_enc < 16) && (dst_enc < 16)) {
-    evmovdqul(src, nds, Assembler::AVX_512bit);
-    vandpd(dst, src, negate_field, vector_len);
-  } else if (src_enc < 16) {
-    evmovdqul(src, nds, Assembler::AVX_512bit);
-    vandpd(src, src, negate_field, vector_len);
-    evmovdqul(dst, src, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    evmovdqul(src, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    vandpd(dst, xmm0, negate_field, vector_len);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-  } else {
-    if (src_enc != dst_enc) {
-      evmovdqul(src, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-      vandpd(xmm0, xmm0, negate_field, vector_len);
-      evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    } else {
-      subptr(rsp, 64);
-      evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-      vandpd(xmm0, xmm0, negate_field, vector_len);
-      evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-      addptr(rsp, 64);
-    }
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vldq()),"XMM register should be 0-15");
+  vandpd(dst, nds, negate_field, vector_len);
 }
 
 void MacroAssembler::vpaddb(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpaddb(dst, nds, src, vector_len);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpaddb(dst, dst, src, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for src
-    evmovdqul(nds, src, Assembler::AVX_512bit);
-    Assembler::vpaddb(dst, dst, nds, vector_len);
-  } else if ((src_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpaddb(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds as scatch for xmm0 to hold src
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpaddb(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, src, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpaddb(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpaddb(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpaddb(XMMRegister dst, XMMRegister nds, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpaddb(dst, nds, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpaddb(dst, dst, src, vector_len);
-  } else if (nds_enc < 16) {
-    // implies dst_enc in upper bank with src as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpaddb(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs in upper bank
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpaddb(xmm0, xmm0, src, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()), "XMM register should be 0-15");
+  Assembler::vpaddb(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpaddw(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpaddw(dst, nds, src, vector_len);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpaddw(dst, dst, src, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for src
-    evmovdqul(nds, src, Assembler::AVX_512bit);
-    Assembler::vpaddw(dst, dst, nds, vector_len);
-  } else if ((src_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpaddw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds as scatch for xmm0 to hold src
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpaddw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, src, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpaddw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpaddw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpaddw(XMMRegister dst, XMMRegister nds, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpaddw(dst, nds, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpaddw(dst, dst, src, vector_len);
-  } else if (nds_enc < 16) {
-    // implies dst_enc in upper bank with src as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpaddw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs in upper bank
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpaddw(xmm0, xmm0, src, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpaddw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpand(XMMRegister dst, XMMRegister nds, AddressLiteral src, int vector_len) {
@@ -4404,694 +4029,109 @@ void MacroAssembler::vpand(XMMRegister dst, XMMRegister nds, AddressLiteral src,
   }
 }
 
-void MacroAssembler::vpbroadcastw(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpbroadcastw(dst, src);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpbroadcastw(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpbroadcastw(xmm0, src);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpbroadcastw(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::vpbroadcastw(xmm1, xmm0);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+void MacroAssembler::vpbroadcastw(XMMRegister dst, XMMRegister src, int vector_len) {
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpbroadcastw(dst, src, vector_len);
 }
 
 void MacroAssembler::vpcmpeqb(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  assert(dst_enc == nds_enc, "");
-  if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpcmpeqb(dst, nds, src, vector_len);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpcmpeqb(xmm0, xmm0, src, vector_len);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpcmpeqb(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::vpcmpeqb(xmm1, xmm1, xmm0, vector_len);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpcmpeqb(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpcmpeqw(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  assert(dst_enc == nds_enc, "");
-  if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpcmpeqw(dst, nds, src, vector_len);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpcmpeqw(xmm0, xmm0, src, vector_len);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpcmpeqw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::vpcmpeqw(xmm1, xmm1, xmm0, vector_len);
-    movdqu(dst, xmm1);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpcmpeqw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpmovzxbw(XMMRegister dst, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpmovzxbw(dst, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpmovzxbw(dst, src, vector_len);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpmovzxbw(xmm0, src, vector_len);
-    movdqu(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpmovzxbw(dst, src, vector_len);
 }
 
 void MacroAssembler::vpmovmskb(Register dst, XMMRegister src) {
-  int src_enc = src->encoding();
-  if (src_enc < 16) {
-    Assembler::vpmovmskb(dst, src);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpmovmskb(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((src->encoding() < 16),"XMM register should be 0-15");
+  Assembler::vpmovmskb(dst, src);
 }
 
 void MacroAssembler::vpmullw(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpmullw(dst, nds, src, vector_len);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpmullw(dst, dst, src, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for src
-    evmovdqul(nds, src, Assembler::AVX_512bit);
-    Assembler::vpmullw(dst, dst, nds, vector_len);
-  } else if ((src_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpmullw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds as scatch for xmm0 to hold src
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpmullw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, src, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpmullw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpmullw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpmullw(XMMRegister dst, XMMRegister nds, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpmullw(dst, nds, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpmullw(dst, dst, src, vector_len);
-  } else if (nds_enc < 16) {
-    // implies dst_enc in upper bank with src as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpmullw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs in upper bank
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpmullw(xmm0, xmm0, src, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpmullw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpsubb(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsubb(dst, nds, src, vector_len);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpsubb(dst, dst, src, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for src
-    evmovdqul(nds, src, Assembler::AVX_512bit);
-    Assembler::vpsubb(dst, dst, nds, vector_len);
-  } else if ((src_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsubb(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds as scatch for xmm0 to hold src
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpsubb(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, src, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsubb(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsubb(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpsubb(XMMRegister dst, XMMRegister nds, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsubb(dst, nds, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpsubb(dst, dst, src, vector_len);
-  } else if (nds_enc < 16) {
-    // implies dst_enc in upper bank with src as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsubb(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs in upper bank
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsubw(xmm0, xmm0, src, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsubb(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpsubw(XMMRegister dst, XMMRegister nds, XMMRegister src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int src_enc = src->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsubw(dst, nds, src, vector_len);
-  } else if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vpsubw(dst, dst, src, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for src
-    evmovdqul(nds, src, Assembler::AVX_512bit);
-    Assembler::vpsubw(dst, dst, nds, vector_len);
-  } else if ((src_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch for dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsubw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds as scatch for xmm0 to hold src
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vpsubw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, src, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsubw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsubw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpsubw(XMMRegister dst, XMMRegister nds, Address src, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsubw(dst, nds, src, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpsubw(dst, dst, src, vector_len);
-  } else if (nds_enc < 16) {
-    // implies dst_enc in upper bank with src as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsubw(nds, nds, src, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs in upper bank
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsubw(xmm0, xmm0, src, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsubw(dst, nds, src, vector_len);
 }
 
 void MacroAssembler::vpsraw(XMMRegister dst, XMMRegister nds, XMMRegister shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int shift_enc = shift->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsraw(dst, nds, shift, vector_len);
-  } else if ((dst_enc < 16) && (shift_enc < 16)) {
-    Assembler::vpsraw(dst, dst, shift, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds_enc as scratch with shift
-    evmovdqul(nds, shift, Assembler::AVX_512bit);
-    Assembler::vpsraw(dst, dst, nds, vector_len);
-  } else if ((shift_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch with dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsraw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds to save a copy of xmm0 and hold shift
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsraw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else if (nds_enc < 16) {
-    // use nds as dest as temps
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsraw(nds, nds, xmm0, vector_len);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, shift, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(xmm1, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && shift->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsraw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vpsraw(XMMRegister dst, XMMRegister nds, int shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsraw(dst, nds, shift, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpsraw(dst, dst, shift, vector_len);
-  } else if (nds_enc < 16) {
-    // use nds as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsraw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // use nds as scratch for xmm0
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsraw(xmm0, xmm0, shift, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsraw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vpsrlw(XMMRegister dst, XMMRegister nds, XMMRegister shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int shift_enc = shift->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsrlw(dst, nds, shift, vector_len);
-  } else if ((dst_enc < 16) && (shift_enc < 16)) {
-    Assembler::vpsrlw(dst, dst, shift, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds_enc as scratch with shift
-    evmovdqul(nds, shift, Assembler::AVX_512bit);
-    Assembler::vpsrlw(dst, dst, nds, vector_len);
-  } else if ((shift_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch with dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsrlw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds to save a copy of xmm0 and hold shift
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsrlw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else if (nds_enc < 16) {
-    // use nds as dest as temps
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsrlw(nds, nds, xmm0, vector_len);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, shift, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(xmm1, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && shift->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsrlw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vpsrlw(XMMRegister dst, XMMRegister nds, int shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsrlw(dst, nds, shift, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpsrlw(dst, dst, shift, vector_len);
-  } else if (nds_enc < 16) {
-    // use nds as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsrlw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // use nds as scratch for xmm0
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsrlw(xmm0, xmm0, shift, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsrlw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vpsllw(XMMRegister dst, XMMRegister nds, XMMRegister shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  int shift_enc = shift->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsllw(dst, nds, shift, vector_len);
-  } else if ((dst_enc < 16) && (shift_enc < 16)) {
-    Assembler::vpsllw(dst, dst, shift, vector_len);
-  } else if ((dst_enc < 16) && (nds_enc < 16)) {
-    // use nds_enc as scratch with shift
-    evmovdqul(nds, shift, Assembler::AVX_512bit);
-    Assembler::vpsllw(dst, dst, nds, vector_len);
-  } else if ((shift_enc < 16) && (nds_enc < 16)) {
-    // use nds as scratch with dst
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else if (dst_enc < 16) {
-    // use nds to save a copy of xmm0 and hold shift
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsllw(dst, dst, xmm0, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  } else if (nds_enc < 16) {
-    // use nds as dest as temps
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, shift, Assembler::AVX_512bit);
-    Assembler::vpsllw(nds, nds, xmm0, vector_len);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // worse case scenario, all regs are in the upper bank
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm1, shift, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(xmm0, xmm0, xmm1, vector_len);
-    evmovdqul(xmm1, dst, Assembler::AVX_512bit);
-    evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert(((dst->encoding() < 16 && shift->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsllw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vpsllw(XMMRegister dst, XMMRegister nds, int shift, int vector_len) {
-  int dst_enc = dst->encoding();
-  int nds_enc = nds->encoding();
-  if (VM_Version::supports_avxonly() || VM_Version::supports_avx512bw()) {
-    Assembler::vpsllw(dst, nds, shift, vector_len);
-  } else if (dst_enc < 16) {
-    Assembler::vpsllw(dst, dst, shift, vector_len);
-  } else if (nds_enc < 16) {
-    // use nds as scratch
-    evmovdqul(nds, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(nds, nds, shift, vector_len);
-    evmovdqul(dst, nds, Assembler::AVX_512bit);
-  } else {
-    // use nds as scratch for xmm0
-    evmovdqul(nds, xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vpsllw(xmm0, xmm0, shift, vector_len);
-    evmovdqul(xmm0, nds, Assembler::AVX_512bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::vpsllw(dst, nds, shift, vector_len);
 }
 
 void MacroAssembler::vptest(XMMRegister dst, XMMRegister src) {
-  int dst_enc = dst->encoding();
-  int src_enc = src->encoding();
-  if ((dst_enc < 16) && (src_enc < 16)) {
-    Assembler::vptest(dst, src);
-  } else if (src_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-    Assembler::vptest(xmm0, src);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else if (dst_enc < 16) {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    evmovdqul(xmm0, src, Assembler::AVX_512bit);
-    Assembler::vptest(dst, xmm0);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  } else {
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-    subptr(rsp, 64);
-    evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-    movdqu(xmm0, src);
-    movdqu(xmm1, dst);
-    Assembler::vptest(xmm1, xmm0);
-    evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-    evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-    addptr(rsp, 64);
-  }
+  assert((dst->encoding() < 16 && src->encoding() < 16),"XMM register should be 0-15");
+  Assembler::vptest(dst, src);
 }
 
-// This instruction exists within macros, ergo we cannot control its input
-// when emitted through those patterns.
 void MacroAssembler::punpcklbw(XMMRegister dst, XMMRegister src) {
-  if (VM_Version::supports_avx512nobw()) {
-    int dst_enc = dst->encoding();
-    int src_enc = src->encoding();
-    if (dst_enc == src_enc) {
-      if (dst_enc < 16) {
-        Assembler::punpcklbw(dst, src);
-      } else {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        Assembler::punpcklbw(xmm0, xmm0);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      }
-    } else {
-      if ((src_enc < 16) && (dst_enc < 16)) {
-        Assembler::punpcklbw(dst, src);
-      } else if (src_enc < 16) {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        Assembler::punpcklbw(xmm0, src);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      } else if (dst_enc < 16) {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, src, Assembler::AVX_512bit);
-        Assembler::punpcklbw(dst, xmm0);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      } else {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        evmovdqul(xmm1, src, Assembler::AVX_512bit);
-        Assembler::punpcklbw(xmm0, xmm1);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      }
-    }
-  } else {
-    Assembler::punpcklbw(dst, src);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::punpcklbw(dst, src);
 }
 
 void MacroAssembler::pshufd(XMMRegister dst, Address src, int mode) {
-  if (VM_Version::supports_avx512vl()) {
-    Assembler::pshufd(dst, src, mode);
-  } else {
-    int dst_enc = dst->encoding();
-    if (dst_enc < 16) {
-      Assembler::pshufd(dst, src, mode);
-    } else {
-      subptr(rsp, 64);
-      evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-      Assembler::pshufd(xmm0, src, mode);
-      evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-      evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-      addptr(rsp, 64);
-    }
-  }
+  assert(((dst->encoding() < 16) || VM_Version::supports_avx512vl()),"XMM register should be 0-15");
+  Assembler::pshufd(dst, src, mode);
 }
 
-// This instruction exists within macros, ergo we cannot control its input
-// when emitted through those patterns.
 void MacroAssembler::pshuflw(XMMRegister dst, XMMRegister src, int mode) {
-  if (VM_Version::supports_avx512nobw()) {
-    int dst_enc = dst->encoding();
-    int src_enc = src->encoding();
-    if (dst_enc == src_enc) {
-      if (dst_enc < 16) {
-        Assembler::pshuflw(dst, src, mode);
-      } else {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        Assembler::pshuflw(xmm0, xmm0, mode);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      }
-    } else {
-      if ((src_enc < 16) && (dst_enc < 16)) {
-        Assembler::pshuflw(dst, src, mode);
-      } else if (src_enc < 16) {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        Assembler::pshuflw(xmm0, src, mode);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      } else if (dst_enc < 16) {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm0, src, Assembler::AVX_512bit);
-        Assembler::pshuflw(dst, xmm0, mode);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      } else {
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-        subptr(rsp, 64);
-        evmovdqul(Address(rsp, 0), xmm1, Assembler::AVX_512bit);
-        evmovdqul(xmm0, dst, Assembler::AVX_512bit);
-        evmovdqul(xmm1, src, Assembler::AVX_512bit);
-        Assembler::pshuflw(xmm0, xmm1, mode);
-        evmovdqul(dst, xmm0, Assembler::AVX_512bit);
-        evmovdqul(xmm1, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-        evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-        addptr(rsp, 64);
-      }
-    }
-  } else {
-    Assembler::pshuflw(dst, src, mode);
-  }
+  assert(((dst->encoding() < 16 && src->encoding() < 16) || VM_Version::supports_avx512vlbw()),"XMM register should be 0-15");
+  Assembler::pshuflw(dst, src, mode);
 }
 
 void MacroAssembler::vandpd(XMMRegister dst, XMMRegister nds, AddressLiteral src, int vector_len) {
@@ -5167,51 +4207,13 @@ void MacroAssembler::vsubss(XMMRegister dst, XMMRegister nds, AddressLiteral src
 }
 
 void MacroAssembler::vnegatess(XMMRegister dst, XMMRegister nds, AddressLiteral src) {
-  int nds_enc = nds->encoding();
-  int dst_enc = dst->encoding();
-  bool dst_upper_bank = (dst_enc > 15);
-  bool nds_upper_bank = (nds_enc > 15);
-  if (VM_Version::supports_avx512novl() &&
-      (nds_upper_bank || dst_upper_bank)) {
-    if (dst_upper_bank) {
-      subptr(rsp, 64);
-      evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-      movflt(xmm0, nds);
-      vxorps(xmm0, xmm0, src, Assembler::AVX_128bit);
-      movflt(dst, xmm0);
-      evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-      addptr(rsp, 64);
-    } else {
-      movflt(dst, nds);
-      vxorps(dst, dst, src, Assembler::AVX_128bit);
-    }
-  } else {
-    vxorps(dst, nds, src, Assembler::AVX_128bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vldq()),"XMM register should be 0-15");
+  vxorps(dst, nds, src, Assembler::AVX_128bit);
 }
 
 void MacroAssembler::vnegatesd(XMMRegister dst, XMMRegister nds, AddressLiteral src) {
-  int nds_enc = nds->encoding();
-  int dst_enc = dst->encoding();
-  bool dst_upper_bank = (dst_enc > 15);
-  bool nds_upper_bank = (nds_enc > 15);
-  if (VM_Version::supports_avx512novl() &&
-      (nds_upper_bank || dst_upper_bank)) {
-    if (dst_upper_bank) {
-      subptr(rsp, 64);
-      evmovdqul(Address(rsp, 0), xmm0, Assembler::AVX_512bit);
-      movdbl(xmm0, nds);
-      vxorpd(xmm0, xmm0, src, Assembler::AVX_128bit);
-      movdbl(dst, xmm0);
-      evmovdqul(xmm0, Address(rsp, 0), Assembler::AVX_512bit);
-      addptr(rsp, 64);
-    } else {
-      movdbl(dst, nds);
-      vxorpd(dst, dst, src, Assembler::AVX_128bit);
-    }
-  } else {
-    vxorpd(dst, nds, src, Assembler::AVX_128bit);
-  }
+  assert(((dst->encoding() < 16 && nds->encoding() < 16) || VM_Version::supports_avx512vldq()),"XMM register should be 0-15");
+  vxorpd(dst, nds, src, Assembler::AVX_128bit);
 }
 
 void MacroAssembler::vxorpd(XMMRegister dst, XMMRegister nds, AddressLiteral src, int vector_len) {
@@ -5232,6 +4234,12 @@ void MacroAssembler::vxorps(XMMRegister dst, XMMRegister nds, AddressLiteral src
   }
 }
 
+void MacroAssembler::clear_jweak_tag(Register possibly_jweak) {
+  const int32_t inverted_jweak_mask = ~static_cast<int32_t>(JNIHandles::weak_tag_mask);
+  STATIC_ASSERT(inverted_jweak_mask == -2); // otherwise check this code
+  // The inverted mask is sign-extended
+  andptr(possibly_jweak, inverted_jweak_mask);
+}
 
 void MacroAssembler::resolve_jobject(Register value,
                                      Register thread,
@@ -5243,293 +4251,15 @@ void MacroAssembler::resolve_jobject(Register value,
   testptr(value, JNIHandles::weak_tag_mask); // Test for jweak tag.
   jcc(Assembler::zero, not_weak);
   // Resolve jweak.
-  movptr(value, Address(value, -JNIHandles::weak_tag_value));
+  access_load_at(T_OBJECT, IN_NATIVE | ON_PHANTOM_OOP_REF,
+                 value, Address(value, -JNIHandles::weak_tag_value), tmp, thread);
   verify_oop(value);
-#if INCLUDE_ALL_GCS
-  if (UseG1GC) {
-    g1_write_barrier_pre(noreg /* obj */,
-                         value /* pre_val */,
-                         thread /* thread */,
-                         tmp /* tmp */,
-                         true /* tosca_live */,
-                         true /* expand_call */);
-  }
-#endif // INCLUDE_ALL_GCS
   jmp(done);
   bind(not_weak);
   // Resolve (untagged) jobject.
-  movptr(value, Address(value, 0));
+  access_load_at(T_OBJECT, IN_NATIVE, value, Address(value, 0), tmp, thread);
   verify_oop(value);
   bind(done);
-}
-
-void MacroAssembler::clear_jweak_tag(Register possibly_jweak) {
-  const int32_t inverted_jweak_mask = ~static_cast<int32_t>(JNIHandles::weak_tag_mask);
-  STATIC_ASSERT(inverted_jweak_mask == -2); // otherwise check this code
-  // The inverted mask is sign-extended
-  andptr(possibly_jweak, inverted_jweak_mask);
-}
-
-//////////////////////////////////////////////////////////////////////////////////
-#if INCLUDE_ALL_GCS
-
-void MacroAssembler::g1_write_barrier_pre(Register obj,
-                                          Register pre_val,
-                                          Register thread,
-                                          Register tmp,
-                                          bool tosca_live,
-                                          bool expand_call) {
-
-  // If expand_call is true then we expand the call_VM_leaf macro
-  // directly to skip generating the check by
-  // InterpreterMacroAssembler::call_VM_leaf_base that checks _last_sp.
-
-#ifdef _LP64
-  assert(thread == r15_thread, "must be");
-#endif // _LP64
-
-  Label done;
-  Label runtime;
-
-  assert(pre_val != noreg, "check this code");
-
-  if (obj != noreg) {
-    assert_different_registers(obj, pre_val, tmp);
-    assert(pre_val != rax, "check this code");
-  }
-
-  Address in_progress(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                       SATBMarkQueue::byte_offset_of_active()));
-  Address index(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                       SATBMarkQueue::byte_offset_of_index()));
-  Address buffer(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                       SATBMarkQueue::byte_offset_of_buf()));
-
-
-  // Is marking active?
-  if (in_bytes(SATBMarkQueue::byte_width_of_active()) == 4) {
-    cmpl(in_progress, 0);
-  } else {
-    assert(in_bytes(SATBMarkQueue::byte_width_of_active()) == 1, "Assumption");
-    cmpb(in_progress, 0);
-  }
-  jcc(Assembler::equal, done);
-
-  // Do we need to load the previous value?
-  if (obj != noreg) {
-    load_heap_oop(pre_val, Address(obj, 0));
-  }
-
-  // Is the previous value null?
-  cmpptr(pre_val, (int32_t) NULL_WORD);
-  jcc(Assembler::equal, done);
-
-  // Can we store original value in the thread's buffer?
-  // Is index == 0?
-  // (The index field is typed as size_t.)
-
-  movptr(tmp, index);                   // tmp := *index_adr
-  cmpptr(tmp, 0);                       // tmp == 0?
-  jcc(Assembler::equal, runtime);       // If yes, goto runtime
-
-  subptr(tmp, wordSize);                // tmp := tmp - wordSize
-  movptr(index, tmp);                   // *index_adr := tmp
-  addptr(tmp, buffer);                  // tmp := tmp + *buffer_adr
-
-  // Record the previous value
-  movptr(Address(tmp, 0), pre_val);
-  jmp(done);
-
-  bind(runtime);
-  // save the live input values
-  if(tosca_live) push(rax);
-
-  if (obj != noreg && obj != rax)
-    push(obj);
-
-  if (pre_val != rax)
-    push(pre_val);
-
-  // Calling the runtime using the regular call_VM_leaf mechanism generates
-  // code (generated by InterpreterMacroAssember::call_VM_leaf_base)
-  // that checks that the *(ebp+frame::interpreter_frame_last_sp) == NULL.
-  //
-  // If we care generating the pre-barrier without a frame (e.g. in the
-  // intrinsified Reference.get() routine) then ebp might be pointing to
-  // the caller frame and so this check will most likely fail at runtime.
-  //
-  // Expanding the call directly bypasses the generation of the check.
-  // So when we do not have have a full interpreter frame on the stack
-  // expand_call should be passed true.
-
-  NOT_LP64( push(thread); )
-
-  if (expand_call) {
-    LP64_ONLY( assert(pre_val != c_rarg1, "smashed arg"); )
-    pass_arg1(this, thread);
-    pass_arg0(this, pre_val);
-    MacroAssembler::call_VM_leaf_base(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), 2);
-  } else {
-    call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), pre_val, thread);
-  }
-
-  NOT_LP64( pop(thread); )
-
-  // save the live input values
-  if (pre_val != rax)
-    pop(pre_val);
-
-  if (obj != noreg && obj != rax)
-    pop(obj);
-
-  if(tosca_live) pop(rax);
-
-  bind(done);
-}
-
-void MacroAssembler::g1_write_barrier_post(Register store_addr,
-                                           Register new_val,
-                                           Register thread,
-                                           Register tmp,
-                                           Register tmp2) {
-#ifdef _LP64
-  assert(thread == r15_thread, "must be");
-#endif // _LP64
-
-  Address queue_index(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
-                                       DirtyCardQueue::byte_offset_of_index()));
-  Address buffer(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
-                                       DirtyCardQueue::byte_offset_of_buf()));
-
-  CardTableModRefBS* ct =
-    barrier_set_cast<CardTableModRefBS>(Universe::heap()->barrier_set());
-  assert(sizeof(*ct->byte_map_base) == sizeof(jbyte), "adjust this code");
-
-  Label done;
-  Label runtime;
-
-  // Does store cross heap regions?
-
-  movptr(tmp, store_addr);
-  xorptr(tmp, new_val);
-  shrptr(tmp, HeapRegion::LogOfHRGrainBytes);
-  jcc(Assembler::equal, done);
-
-  // crosses regions, storing NULL?
-
-  cmpptr(new_val, (int32_t) NULL_WORD);
-  jcc(Assembler::equal, done);
-
-  // storing region crossing non-NULL, is card already dirty?
-
-  const Register card_addr = tmp;
-  const Register cardtable = tmp2;
-
-  movptr(card_addr, store_addr);
-  shrptr(card_addr, CardTableModRefBS::card_shift);
-  // Do not use ExternalAddress to load 'byte_map_base', since 'byte_map_base' is NOT
-  // a valid address and therefore is not properly handled by the relocation code.
-  movptr(cardtable, (intptr_t)ct->byte_map_base);
-  addptr(card_addr, cardtable);
-
-  cmpb(Address(card_addr, 0), (int)G1SATBCardTableModRefBS::g1_young_card_val());
-  jcc(Assembler::equal, done);
-
-  membar(Assembler::Membar_mask_bits(Assembler::StoreLoad));
-  cmpb(Address(card_addr, 0), (int)CardTableModRefBS::dirty_card_val());
-  jcc(Assembler::equal, done);
-
-
-  // storing a region crossing, non-NULL oop, card is clean.
-  // dirty card and log.
-
-  movb(Address(card_addr, 0), (int)CardTableModRefBS::dirty_card_val());
-
-  cmpl(queue_index, 0);
-  jcc(Assembler::equal, runtime);
-  subl(queue_index, wordSize);
-  movptr(tmp2, buffer);
-#ifdef _LP64
-  movslq(rscratch1, queue_index);
-  addq(tmp2, rscratch1);
-  movq(Address(tmp2, 0), card_addr);
-#else
-  addl(tmp2, queue_index);
-  movl(Address(tmp2, 0), card_addr);
-#endif
-  jmp(done);
-
-  bind(runtime);
-  // save the live input values
-  push(store_addr);
-  push(new_val);
-#ifdef _LP64
-  call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post), card_addr, r15_thread);
-#else
-  push(thread);
-  call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post), card_addr, thread);
-  pop(thread);
-#endif
-  pop(new_val);
-  pop(store_addr);
-
-  bind(done);
-}
-
-#endif // INCLUDE_ALL_GCS
-//////////////////////////////////////////////////////////////////////////////////
-
-
-void MacroAssembler::store_check(Register obj, Address dst) {
-  store_check(obj);
-}
-
-void MacroAssembler::store_check(Register obj) {
-  // Does a store check for the oop in register obj. The content of
-  // register obj is destroyed afterwards.
-  BarrierSet* bs = Universe::heap()->barrier_set();
-  assert(bs->kind() == BarrierSet::CardTableForRS ||
-         bs->kind() == BarrierSet::CardTableExtension,
-         "Wrong barrier set kind");
-
-  CardTableModRefBS* ct = barrier_set_cast<CardTableModRefBS>(bs);
-  assert(sizeof(*ct->byte_map_base) == sizeof(jbyte), "adjust this code");
-
-  shrptr(obj, CardTableModRefBS::card_shift);
-
-  Address card_addr;
-
-  // The calculation for byte_map_base is as follows:
-  // byte_map_base = _byte_map - (uintptr_t(low_bound) >> card_shift);
-  // So this essentially converts an address to a displacement and it will
-  // never need to be relocated. On 64bit however the value may be too
-  // large for a 32bit displacement.
-  intptr_t disp = (intptr_t) ct->byte_map_base;
-  if (is_simm32(disp)) {
-    card_addr = Address(noreg, obj, Address::times_1, disp);
-  } else {
-    // By doing it as an ExternalAddress 'disp' could be converted to a rip-relative
-    // displacement and done in a single instruction given favorable mapping and a
-    // smarter version of as_Address. However, 'ExternalAddress' generates a relocation
-    // entry and that entry is not properly handled by the relocation code.
-    AddressLiteral cardtable((address)ct->byte_map_base, relocInfo::none);
-    Address index(noreg, obj, Address::times_1);
-    card_addr = as_Address(ArrayAddress(cardtable, index));
-  }
-
-  int dirty = CardTableModRefBS::dirty_card_val();
-  if (UseCondCardMark) {
-    Label L_already_dirty;
-    if (UseConcMarkSweepGC) {
-      membar(Assembler::StoreLoad);
-    }
-    cmpb(card_addr, dirty);
-    jcc(Assembler::equal, L_already_dirty);
-    movb(card_addr, dirty);
-    bind(L_already_dirty);
-  } else {
-    movb(card_addr, dirty);
-  }
 }
 
 void MacroAssembler::subptr(Register dst, int32_t imm32) {
@@ -5564,153 +4294,24 @@ void MacroAssembler::testptr(Register dst, Register src) {
 }
 
 // Defines obj, preserves var_size_in_bytes, okay for t2 == var_size_in_bytes.
-void MacroAssembler::tlab_allocate(Register obj,
+void MacroAssembler::tlab_allocate(Register thread, Register obj,
                                    Register var_size_in_bytes,
                                    int con_size_in_bytes,
                                    Register t1,
                                    Register t2,
                                    Label& slow_case) {
-  assert_different_registers(obj, t1, t2);
-  assert_different_registers(obj, var_size_in_bytes, t1);
-  Register end = t2;
-  Register thread = NOT_LP64(t1) LP64_ONLY(r15_thread);
-
-  verify_tlab();
-
-  NOT_LP64(get_thread(thread));
-
-  movptr(obj, Address(thread, JavaThread::tlab_top_offset()));
-  if (var_size_in_bytes == noreg) {
-    lea(end, Address(obj, con_size_in_bytes));
-  } else {
-    lea(end, Address(obj, var_size_in_bytes, Address::times_1));
-  }
-  cmpptr(end, Address(thread, JavaThread::tlab_end_offset()));
-  jcc(Assembler::above, slow_case);
-
-  // update the tlab top pointer
-  movptr(Address(thread, JavaThread::tlab_top_offset()), end);
-
-  // recover var_size_in_bytes if necessary
-  if (var_size_in_bytes == end) {
-    subptr(var_size_in_bytes, obj);
-  }
-  verify_tlab();
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->tlab_allocate(this, thread, obj, var_size_in_bytes, con_size_in_bytes, t1, t2, slow_case);
 }
 
-// Preserves rbx, and rdx.
-Register MacroAssembler::tlab_refill(Label& retry,
-                                     Label& try_eden,
-                                     Label& slow_case) {
-  Register top = rax;
-  Register t1  = rcx; // object size
-  Register t2  = rsi;
-  Register thread_reg = NOT_LP64(rdi) LP64_ONLY(r15_thread);
-  assert_different_registers(top, thread_reg, t1, t2, /* preserve: */ rbx, rdx);
-  Label do_refill, discard_tlab;
-
-  if (!Universe::heap()->supports_inline_contig_alloc()) {
-    // No allocation in the shared eden.
-    jmp(slow_case);
-  }
-
-  NOT_LP64(get_thread(thread_reg));
-
-  movptr(top, Address(thread_reg, in_bytes(JavaThread::tlab_top_offset())));
-  movptr(t1,  Address(thread_reg, in_bytes(JavaThread::tlab_end_offset())));
-
-  // calculate amount of free space
-  subptr(t1, top);
-  shrptr(t1, LogHeapWordSize);
-
-  // Retain tlab and allocate object in shared space if
-  // the amount free in the tlab is too large to discard.
-  cmpptr(t1, Address(thread_reg, in_bytes(JavaThread::tlab_refill_waste_limit_offset())));
-  jcc(Assembler::lessEqual, discard_tlab);
-
-  // Retain
-  // %%% yuck as movptr...
-  movptr(t2, (int32_t) ThreadLocalAllocBuffer::refill_waste_limit_increment());
-  addptr(Address(thread_reg, in_bytes(JavaThread::tlab_refill_waste_limit_offset())), t2);
-  if (TLABStats) {
-    // increment number of slow_allocations
-    addl(Address(thread_reg, in_bytes(JavaThread::tlab_slow_allocations_offset())), 1);
-  }
-  jmp(try_eden);
-
-  bind(discard_tlab);
-  if (TLABStats) {
-    // increment number of refills
-    addl(Address(thread_reg, in_bytes(JavaThread::tlab_number_of_refills_offset())), 1);
-    // accumulate wastage -- t1 is amount free in tlab
-    addl(Address(thread_reg, in_bytes(JavaThread::tlab_fast_refill_waste_offset())), t1);
-  }
-
-  // if tlab is currently allocated (top or end != null) then
-  // fill [top, end + alignment_reserve) with array object
-  testptr(top, top);
-  jcc(Assembler::zero, do_refill);
-
-  // set up the mark word
-  movptr(Address(top, oopDesc::mark_offset_in_bytes()), (intptr_t)markOopDesc::prototype()->copy_set_hash(0x2));
-  // set the length to the remaining space
-  subptr(t1, typeArrayOopDesc::header_size(T_INT));
-  addptr(t1, (int32_t)ThreadLocalAllocBuffer::alignment_reserve());
-  shlptr(t1, log2_intptr(HeapWordSize/sizeof(jint)));
-  movl(Address(top, arrayOopDesc::length_offset_in_bytes()), t1);
-  // set klass to intArrayKlass
-  // dubious reloc why not an oop reloc?
-  movptr(t1, ExternalAddress((address)Universe::intArrayKlassObj_addr()));
-  // store klass last.  concurrent gcs assumes klass length is valid if
-  // klass field is not null.
-  store_klass(top, t1);
-
-  movptr(t1, top);
-  subptr(t1, Address(thread_reg, in_bytes(JavaThread::tlab_start_offset())));
-  incr_allocated_bytes(thread_reg, t1, 0);
-
-  // refill the tlab with an eden allocation
-  bind(do_refill);
-  movptr(t1, Address(thread_reg, in_bytes(JavaThread::tlab_size_offset())));
-  shlptr(t1, LogHeapWordSize);
-  // allocate new tlab, address returned in top
-  eden_allocate(top, t1, 0, t2, slow_case);
-
-  // Check that t1 was preserved in eden_allocate.
-#ifdef ASSERT
-  if (UseTLAB) {
-    Label ok;
-    Register tsize = rsi;
-    assert_different_registers(tsize, thread_reg, t1);
-    push(tsize);
-    movptr(tsize, Address(thread_reg, in_bytes(JavaThread::tlab_size_offset())));
-    shlptr(tsize, LogHeapWordSize);
-    cmpptr(t1, tsize);
-    jcc(Assembler::equal, ok);
-    STOP("assert(t1 != tlab size)");
-    should_not_reach_here();
-
-    bind(ok);
-    pop(tsize);
-  }
-#endif
-  movptr(Address(thread_reg, in_bytes(JavaThread::tlab_start_offset())), top);
-  movptr(Address(thread_reg, in_bytes(JavaThread::tlab_top_offset())), top);
-  addptr(top, t1);
-  subptr(top, (int32_t)ThreadLocalAllocBuffer::alignment_reserve_in_bytes());
-  movptr(Address(thread_reg, in_bytes(JavaThread::tlab_end_offset())), top);
-
-  if (ZeroTLAB) {
-    // This is a fast TLAB refill, therefore the GC is not notified of it.
-    // So compiled code must fill the new TLAB with zeroes.
-    movptr(top, Address(thread_reg, in_bytes(JavaThread::tlab_start_offset())));
-    zero_memory(top, t1, 0, t2);
-  }
-
-  verify_tlab();
-  jmp(retry);
-
-  return thread_reg; // for use by caller
+// Defines obj, preserves var_size_in_bytes
+void MacroAssembler::eden_allocate(Register thread, Register obj,
+                                   Register var_size_in_bytes,
+                                   int con_size_in_bytes,
+                                   Register t1,
+                                   Label& slow_case) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->eden_allocate(this, thread, obj, var_size_in_bytes, con_size_in_bytes, t1, slow_case);
 }
 
 // Preserves the contents of address, destroys the contents length_in_bytes and temp.
@@ -5767,36 +4368,6 @@ void MacroAssembler::zero_memory(Register address, Register length_in_bytes, int
   }
 
   bind(done);
-}
-
-void MacroAssembler::incr_allocated_bytes(Register thread,
-                                          Register var_size_in_bytes,
-                                          int con_size_in_bytes,
-                                          Register t1) {
-  if (!thread->is_valid()) {
-#ifdef _LP64
-    thread = r15_thread;
-#else
-    assert(t1->is_valid(), "need temp reg");
-    thread = t1;
-    get_thread(thread);
-#endif
-  }
-
-#ifdef _LP64
-  if (var_size_in_bytes->is_valid()) {
-    addq(Address(thread, in_bytes(JavaThread::allocated_bytes_offset())), var_size_in_bytes);
-  } else {
-    addq(Address(thread, in_bytes(JavaThread::allocated_bytes_offset())), con_size_in_bytes);
-  }
-#else
-  if (var_size_in_bytes->is_valid()) {
-    addl(Address(thread, in_bytes(JavaThread::allocated_bytes_offset())), var_size_in_bytes);
-  } else {
-    addl(Address(thread, in_bytes(JavaThread::allocated_bytes_offset())), con_size_in_bytes);
-  }
-  adcl(Address(thread, in_bytes(JavaThread::allocated_bytes_offset())+4), 0);
-#endif
 }
 
 // Look up the method for a megamorphic invokeinterface call.
@@ -6640,12 +5211,15 @@ void MacroAssembler::restore_cpu_control_state_after_jni() {
   // Clear upper bits of YMM registers to avoid SSE <-> AVX transition penalty.
   vzeroupper();
   // Reset k1 to 0xffff.
-  if (VM_Version::supports_evex()) {
+
+#ifdef COMPILER2
+  if (PostLoopMultiversioning && VM_Version::supports_evex()) {
     push(rcx);
     movl(rcx, 0xffff);
     kmovwl(k1, rcx);
     pop(rcx);
   }
+#endif // COMPILER2
 
 #ifndef _LP64
   // Either restore the x87 floating pointer control word after returning
@@ -6657,19 +5231,24 @@ void MacroAssembler::restore_cpu_control_state_after_jni() {
 }
 
 // ((OopHandle)result).resolve();
-void MacroAssembler::resolve_oop_handle(Register result) {
-  // OopHandle::resolve is an indirection.
-  movptr(result, Address(result, 0));
+void MacroAssembler::resolve_oop_handle(Register result, Register tmp) {
+  assert_different_registers(result, tmp);
+
+  // Only 64 bit platforms support GCs that require a tmp register
+  // Only IN_HEAP loads require a thread_tmp register
+  // OopHandle::resolve is an indirection like jobject.
+  access_load_at(T_OBJECT, IN_NATIVE,
+                 result, Address(result, 0), tmp, /*tmp_thread*/noreg);
 }
 
-void MacroAssembler::load_mirror(Register mirror, Register method) {
+void MacroAssembler::load_mirror(Register mirror, Register method, Register tmp) {
   // get mirror
   const int mirror_offset = in_bytes(Klass::java_mirror_offset());
   movptr(mirror, Address(method, Method::const_offset()));
   movptr(mirror, Address(mirror, ConstMethod::constants_offset()));
   movptr(mirror, Address(mirror, ConstantPool::pool_holder_offset_in_bytes()));
   movptr(mirror, Address(mirror, mirror_offset));
-  resolve_oop_handle(mirror);
+  resolve_oop_handle(mirror, tmp);
 }
 
 void MacroAssembler::load_klass(Register dst, Register src) {
@@ -6697,69 +5276,49 @@ void MacroAssembler::store_klass(Register dst, Register src) {
     movptr(Address(dst, oopDesc::klass_offset_in_bytes()), src);
 }
 
-void MacroAssembler::load_heap_oop(Register dst, Address src) {
-#ifdef _LP64
-  // FIXME: Must change all places where we try to load the klass.
-  if (UseCompressedOops) {
-    movl(dst, src);
-    decode_heap_oop(dst);
-  } else
-#endif
-    movptr(dst, src);
+void MacroAssembler::access_load_at(BasicType type, DecoratorSet decorators, Register dst, Address src,
+                                    Register tmp1, Register thread_tmp) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  decorators = AccessInternal::decorator_fixup(decorators);
+  bool as_raw = (decorators & AS_RAW) != 0;
+  if (as_raw) {
+    bs->BarrierSetAssembler::load_at(this, decorators, type, dst, src, tmp1, thread_tmp);
+  } else {
+    bs->load_at(this, decorators, type, dst, src, tmp1, thread_tmp);
+  }
+}
+
+void MacroAssembler::access_store_at(BasicType type, DecoratorSet decorators, Address dst, Register src,
+                                     Register tmp1, Register tmp2) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  decorators = AccessInternal::decorator_fixup(decorators);
+  bool as_raw = (decorators & AS_RAW) != 0;
+  if (as_raw) {
+    bs->BarrierSetAssembler::store_at(this, decorators, type, dst, src, tmp1, tmp2);
+  } else {
+    bs->store_at(this, decorators, type, dst, src, tmp1, tmp2);
+  }
+}
+
+void MacroAssembler::load_heap_oop(Register dst, Address src, Register tmp1,
+                                   Register thread_tmp, DecoratorSet decorators) {
+  access_load_at(T_OBJECT, IN_HEAP | decorators, dst, src, tmp1, thread_tmp);
 }
 
 // Doesn't do verfication, generates fixed size code
-void MacroAssembler::load_heap_oop_not_null(Register dst, Address src) {
-#ifdef _LP64
-  if (UseCompressedOops) {
-    movl(dst, src);
-    decode_heap_oop_not_null(dst);
-  } else
-#endif
-    movptr(dst, src);
+void MacroAssembler::load_heap_oop_not_null(Register dst, Address src, Register tmp1,
+                                            Register thread_tmp, DecoratorSet decorators) {
+  access_load_at(T_OBJECT, IN_HEAP | IS_NOT_NULL | decorators, dst, src, tmp1, thread_tmp);
 }
 
-void MacroAssembler::store_heap_oop(Address dst, Register src) {
-#ifdef _LP64
-  if (UseCompressedOops) {
-    assert(!dst.uses(src), "not enough registers");
-    encode_heap_oop(src);
-    movl(dst, src);
-  } else
-#endif
-    movptr(dst, src);
-}
-
-void MacroAssembler::cmp_heap_oop(Register src1, Address src2, Register tmp) {
-  assert_different_registers(src1, tmp);
-#ifdef _LP64
-  if (UseCompressedOops) {
-    bool did_push = false;
-    if (tmp == noreg) {
-      tmp = rax;
-      push(tmp);
-      did_push = true;
-      assert(!src2.uses(rsp), "can't push");
-    }
-    load_heap_oop(tmp, src2);
-    cmpptr(src1, tmp);
-    if (did_push)  pop(tmp);
-  } else
-#endif
-    cmpptr(src1, src2);
+void MacroAssembler::store_heap_oop(Address dst, Register src, Register tmp1,
+                                    Register tmp2, DecoratorSet decorators) {
+  access_store_at(T_OBJECT, IN_HEAP | decorators, dst, src, tmp1, tmp2);
 }
 
 // Used for storing NULLs.
 void MacroAssembler::store_heap_oop_null(Address dst) {
-#ifdef _LP64
-  if (UseCompressedOops) {
-    movl(dst, (int32_t)NULL_WORD);
-  } else {
-    movslq(dst, (int32_t)NULL_WORD);
-  }
-#else
-  movl(dst, (int32_t)NULL_WORD);
-#endif
+  access_store_at(T_OBJECT, IN_HEAP, dst, noreg, noreg, noreg);
 }
 
 #ifdef _LP64
@@ -7174,7 +5733,59 @@ void MacroAssembler::verified_entry(int framesize, int stack_bang_size, bool fp_
 
 }
 
-void MacroAssembler::clear_mem(Register base, Register cnt, Register tmp, bool is_large) {
+// clear memory of size 'cnt' qwords, starting at 'base' using XMM/YMM registers
+void MacroAssembler::xmm_clear_mem(Register base, Register cnt, XMMRegister xtmp) {
+  // cnt - number of qwords (8-byte words).
+  // base - start address, qword aligned.
+  Label L_zero_64_bytes, L_loop, L_sloop, L_tail, L_end;
+  if (UseAVX >= 2) {
+    vpxor(xtmp, xtmp, xtmp, AVX_256bit);
+  } else {
+    pxor(xtmp, xtmp);
+  }
+  jmp(L_zero_64_bytes);
+
+  BIND(L_loop);
+  if (UseAVX >= 2) {
+    vmovdqu(Address(base,  0), xtmp);
+    vmovdqu(Address(base, 32), xtmp);
+  } else {
+    movdqu(Address(base,  0), xtmp);
+    movdqu(Address(base, 16), xtmp);
+    movdqu(Address(base, 32), xtmp);
+    movdqu(Address(base, 48), xtmp);
+  }
+  addptr(base, 64);
+
+  BIND(L_zero_64_bytes);
+  subptr(cnt, 8);
+  jccb(Assembler::greaterEqual, L_loop);
+  addptr(cnt, 4);
+  jccb(Assembler::less, L_tail);
+  // Copy trailing 32 bytes
+  if (UseAVX >= 2) {
+    vmovdqu(Address(base, 0), xtmp);
+  } else {
+    movdqu(Address(base,  0), xtmp);
+    movdqu(Address(base, 16), xtmp);
+  }
+  addptr(base, 32);
+  subptr(cnt, 4);
+
+  BIND(L_tail);
+  addptr(cnt, 4);
+  jccb(Assembler::lessEqual, L_end);
+  decrement(cnt);
+
+  BIND(L_sloop);
+  movq(Address(base, 0), xtmp);
+  addptr(base, 8);
+  decrement(cnt);
+  jccb(Assembler::greaterEqual, L_sloop);
+  BIND(L_end);
+}
+
+void MacroAssembler::clear_mem(Register base, Register cnt, Register tmp, XMMRegister xtmp, bool is_large) {
   // cnt - number of qwords (8-byte words).
   // base - start address, qword aligned.
   // is_large - if optimizers know cnt is larger than InitArrayShortSize
@@ -7186,7 +5797,9 @@ void MacroAssembler::clear_mem(Register base, Register cnt, Register tmp, bool i
 
   Label DONE;
 
-  xorptr(tmp, tmp);
+  if (!is_large || !UseXMMForObjInit) {
+    xorptr(tmp, tmp);
+  }
 
   if (!is_large) {
     Label LOOP, LONG;
@@ -7212,6 +5825,9 @@ void MacroAssembler::clear_mem(Register base, Register cnt, Register tmp, bool i
   if (UseFastStosb) {
     shlptr(cnt, 3); // convert to number of bytes
     rep_stosb();
+  } else if (UseXMMForObjInit) {
+    movptr(tmp, base);
+    xmm_clear_mem(tmp, cnt, xtmp);
   } else {
     NOT_LP64(shlptr(cnt, 1);) // convert to number of 32-bit words for 32-bit VM
     rep_stos();
@@ -7741,7 +6357,7 @@ void MacroAssembler::string_indexof_char(Register str1, Register cnt1, Register 
     cmpl(cnt1, 2*stride);
     jcc(Assembler::less, SCAN_TO_8_CHAR_INIT);
     movdl(vec1, ch);
-    vpbroadcastw(vec1, vec1);
+    vpbroadcastw(vec1, vec1, Assembler::AVX_256bit);
     vpxor(vec2, vec2);
     movl(tmp, cnt1);
     andl(tmp, 0xFFFFFFF0);  //vector count (in chars)
@@ -8244,8 +6860,6 @@ void MacroAssembler::has_negatives(Register ary1, Register len,
     VM_Version::supports_avx512vlbw() &&
     VM_Version::supports_bmi2()) {
 
-    set_vector_masking();  // opening of the stub context for programming mask registers
-
     Label test_64_loop, test_tail;
     Register tmp3_aliased = len;
 
@@ -8274,15 +6888,12 @@ void MacroAssembler::has_negatives(Register ary1, Register len,
     testl(tmp1, -1);
     jcc(Assembler::zero, FALSE_LABEL);
 
-    // Save k1
-    kmovql(k3, k1);
-
     // ~(~0 << len) applied up to two times (for 32-bit scenario)
 #ifdef _LP64
     mov64(tmp3_aliased, 0xFFFFFFFFFFFFFFFF);
     shlxq(tmp3_aliased, tmp3_aliased, tmp1);
     notq(tmp3_aliased);
-    kmovql(k1, tmp3_aliased);
+    kmovql(k3, tmp3_aliased);
 #else
     Label k_init;
     jmp(k_init);
@@ -8291,7 +6902,7 @@ void MacroAssembler::has_negatives(Register ary1, Register len,
     // data required to compose 64 1's to the instruction stream
     // We emit 64 byte wide series of elements from 0..63 which later on would
     // be used as a compare targets with tail count contained in tmp1 register.
-    // Result would be a k1 register having tmp1 consecutive number or 1
+    // Result would be a k register having tmp1 consecutive number or 1
     // counting from least significant bit.
     address tmp = pc();
     emit_int64(0x0706050403020100);
@@ -8307,18 +6918,14 @@ void MacroAssembler::has_negatives(Register ary1, Register len,
     lea(len, InternalAddress(tmp));
     // create mask to test for negative byte inside a vector
     evpbroadcastb(vec1, tmp1, Assembler::AVX_512bit);
-    evpcmpgtb(k1, vec1, Address(len, 0), Assembler::AVX_512bit);
+    evpcmpgtb(k3, vec1, Address(len, 0), Assembler::AVX_512bit);
 
 #endif
-    evpcmpgtb(k2, k1, vec2, Address(ary1, 0), Assembler::AVX_512bit);
-    ktestq(k2, k1);
-    // Restore k1
-    kmovql(k1, k3);
+    evpcmpgtb(k2, k3, vec2, Address(ary1, 0), Assembler::AVX_512bit);
+    ktestq(k2, k3);
     jcc(Assembler::notZero, TRUE_LABEL);
 
     jmp(FALSE_LABEL);
-
-    clear_vector_masking();   // closing of the stub context for programming mask registers
   } else {
     movl(result, len); // copy
 
@@ -8336,7 +6943,7 @@ void MacroAssembler::has_negatives(Register ary1, Register len,
 
       movl(tmp1, 0x80808080);   // create mask to test for Unicode chars in vector
       movdl(vec2, tmp1);
-      vpbroadcastd(vec2, vec2);
+      vpbroadcastd(vec2, vec2, Assembler::AVX_256bit);
 
       bind(COMPARE_WIDE_VECTORS);
       vmovdqu(vec1, Address(ary1, len, Address::times_1));
@@ -8758,15 +7365,11 @@ void MacroAssembler::generate_fill(BasicType t, bool aligned,
     {
       assert( UseSSE >= 2, "supported cpu only" );
       Label L_fill_32_bytes_loop, L_check_fill_8_bytes, L_fill_8_bytes_loop, L_fill_8_bytes;
-      if (UseAVX > 2) {
-        movl(rtmp, 0xffff);
-        kmovwl(k1, rtmp);
-      }
       movdl(xtmp, value);
       if (UseAVX > 2 && UseUnalignedLoadStores) {
         // Fill 64-byte chunks
         Label L_fill_64_bytes_loop, L_check_fill_32_bytes;
-        evpbroadcastd(xtmp, xtmp, Assembler::AVX_512bit);
+        vpbroadcastd(xtmp, xtmp, Assembler::AVX_512bit);
 
         subl(count, 16 << shift);
         jcc(Assembler::less, L_check_fill_32_bytes);
@@ -8789,7 +7392,7 @@ void MacroAssembler::generate_fill(BasicType t, bool aligned,
       } else if (UseAVX == 2 && UseUnalignedLoadStores) {
         // Fill 64-byte chunks
         Label L_fill_64_bytes_loop, L_check_fill_32_bytes;
-        vpbroadcastd(xtmp, xtmp);
+        vpbroadcastd(xtmp, xtmp, Assembler::AVX_256bit);
 
         subl(count, 16 << shift);
         jcc(Assembler::less, L_check_fill_32_bytes);
@@ -8930,7 +7533,7 @@ void MacroAssembler::encode_iso_array(Register src, Register dst, Register len,
       Label L_chars_32_check, L_copy_32_chars, L_copy_32_chars_exit;
       movl(tmp5, 0xff00ff00);   // create mask to test for Unicode chars in vector
       movdl(tmp1Reg, tmp5);
-      vpbroadcastd(tmp1Reg, tmp1Reg);
+      vpbroadcastd(tmp1Reg, tmp1Reg, Assembler::AVX_256bit);
       jmp(L_chars_32_check);
 
       bind(L_copy_32_chars);
@@ -9504,7 +8107,6 @@ void MacroAssembler::vectorized_mismatch(Register obja, Register objb, Register 
 
   if ((UseAVX > 2) &&
       VM_Version::supports_avx512vlbw()) {
-    set_vector_masking();  // opening of the stub context for programming mask registers
     cmpq(length, 64);
     jcc(Assembler::less, VECTOR32_TAIL);
     movq(tmp1, length);
@@ -9527,19 +8129,15 @@ void MacroAssembler::vectorized_mismatch(Register obja, Register objb, Register 
 
     bind(VECTOR64_TAIL);
     // AVX512 code to compare upto 63 byte vectors.
-    // Save k1
-    kmovql(k3, k1);
     mov64(tmp2, 0xFFFFFFFFFFFFFFFF);
     shlxq(tmp2, tmp2, tmp1);
     notq(tmp2);
-    kmovql(k1, tmp2);
+    kmovql(k3, tmp2);
 
-    evmovdqub(rymm0, k1, Address(obja, result), Assembler::AVX_512bit);
-    evpcmpeqb(k7, k1, rymm0, Address(objb, result), Assembler::AVX_512bit);
+    evmovdqub(rymm0, k3, Address(obja, result), Assembler::AVX_512bit);
+    evpcmpeqb(k7, k3, rymm0, Address(objb, result), Assembler::AVX_512bit);
 
-    ktestql(k7, k1);
-    // Restore k1
-    kmovql(k1, k3);
+    ktestql(k7, k3);
     jcc(Assembler::below, SAME_TILL_END);     // not mismatch
 
     bind(VECTOR64_NOT_EQUAL);
@@ -9550,7 +8148,6 @@ void MacroAssembler::vectorized_mismatch(Register obja, Register objb, Register 
     shrq(result);
     jmp(DONE);
     bind(VECTOR32_TAIL);
-    clear_vector_masking();   // closing of the stub context for programming mask registers
   }
 
   cmpq(length, 8);
@@ -10226,6 +8823,16 @@ void MacroAssembler::update_byte_crc32(Register crc, Register val, Register tabl
 }
 
 /**
+* Fold four 128-bit data chunks
+*/
+void MacroAssembler::fold_128bit_crc32_avx512(XMMRegister xcrc, XMMRegister xK, XMMRegister xtmp, Register buf, int offset) {
+  evpclmulhdq(xtmp, xK, xcrc, Assembler::AVX_512bit); // [123:64]
+  evpclmulldq(xcrc, xK, xcrc, Assembler::AVX_512bit); // [63:0]
+  evpxorq(xcrc, xcrc, Address(buf, offset), Assembler::AVX_512bit /* vector_len */);
+  evpxorq(xcrc, xcrc, xtmp, Assembler::AVX_512bit /* vector_len */);
+}
+
+/**
  * Fold 128-bit data chunk
  */
 void MacroAssembler::fold_128bit_crc32(XMMRegister xcrc, XMMRegister xK, XMMRegister xtmp, Register buf, int offset) {
@@ -10300,11 +8907,6 @@ void MacroAssembler::kernel_crc32(Register crc, Register buf, Register len, Regi
   // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
   // context for the registers used, where all instructions below are using 128-bit mode
   // On EVEX without VL and BW, these instructions will all be AVX.
-  if (VM_Version::supports_avx512vlbw()) {
-    movl(tmp, 0xffff);
-    kmovwl(k1, tmp);
-  }
-
   lea(table, ExternalAddress(StubRoutines::crc_table_addr()));
   notl(crc); // ~crc
   cmpl(len, 16);
@@ -10330,6 +8932,34 @@ void MacroAssembler::kernel_crc32(Register crc, Register buf, Register len, Regi
   shrl(len, 4);
   jcc(Assembler::zero, L_tail_restore);
 
+  // Fold total 512 bits of polynomial on each iteration
+  if (VM_Version::supports_vpclmulqdq()) {
+    Label Parallel_loop, L_No_Parallel;
+
+    cmpl(len, 8);
+    jccb(Assembler::less, L_No_Parallel);
+
+    movdqu(xmm0, ExternalAddress(StubRoutines::x86::crc_by128_masks_addr() + 32));
+    evmovdquq(xmm1, Address(buf, 0), Assembler::AVX_512bit);
+    movdl(xmm5, crc);
+    evpxorq(xmm1, xmm1, xmm5, Assembler::AVX_512bit);
+    addptr(buf, 64);
+    subl(len, 7);
+    evshufi64x2(xmm0, xmm0, xmm0, 0x00, Assembler::AVX_512bit); //propagate the mask from 128 bits to 512 bits
+
+    BIND(Parallel_loop);
+    fold_128bit_crc32_avx512(xmm1, xmm0, xmm5, buf, 0);
+    addptr(buf, 64);
+    subl(len, 4);
+    jcc(Assembler::greater, Parallel_loop);
+
+    vextracti64x2(xmm2, xmm1, 0x01);
+    vextracti64x2(xmm3, xmm1, 0x02);
+    vextracti64x2(xmm4, xmm1, 0x03);
+    jmp(L_fold_512b);
+
+    BIND(L_No_Parallel);
+  }
   // Fold crc into first bytes of vector
   movdqa(xmm1, Address(buf, 0));
   movdl(rax, xmm1);
@@ -10938,9 +9568,7 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     VM_Version::supports_avx512vlbw() &&
     VM_Version::supports_bmi2()) {
 
-    set_vector_masking();  // opening of the stub context for programming mask registers
-
-    Label copy_32_loop, copy_loop_tail, restore_k1_return_zero;
+    Label copy_32_loop, copy_loop_tail;
 
     // alignement
     Label post_alignement;
@@ -10954,9 +9582,6 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     // Create mask to test for Unicode chars inside zmm vector
     movl(result, 0x00FF);
     evpbroadcastw(tmp2Reg, result, Assembler::AVX_512bit);
-
-    // Save k1
-    kmovql(k3, k1);
 
     testl(len, -64);
     jcc(Assembler::zero, post_alignement);
@@ -10974,14 +9599,14 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     movl(result, 0xFFFFFFFF);
     shlxl(result, result, tmp5);
     notl(result);
-    kmovdl(k1, result);
+    kmovdl(k3, result);
 
-    evmovdquw(tmp1Reg, k1, Address(src, 0), Assembler::AVX_512bit);
-    evpcmpuw(k2, k1, tmp1Reg, tmp2Reg, Assembler::le, Assembler::AVX_512bit);
-    ktestd(k2, k1);
-    jcc(Assembler::carryClear, restore_k1_return_zero);
+    evmovdquw(tmp1Reg, k3, Address(src, 0), Assembler::AVX_512bit);
+    evpcmpuw(k2, k3, tmp1Reg, tmp2Reg, Assembler::le, Assembler::AVX_512bit);
+    ktestd(k2, k3);
+    jcc(Assembler::carryClear, return_zero);
 
-    evpmovwb(Address(dst, 0), k1, tmp1Reg, Assembler::AVX_512bit);
+    evpmovwb(Address(dst, 0), k3, tmp1Reg, Assembler::AVX_512bit);
 
     addptr(src, tmp5);
     addptr(src, tmp5);
@@ -11004,7 +9629,7 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     evmovdquw(tmp1Reg, Address(src, len, Address::times_2), Assembler::AVX_512bit);
     evpcmpuw(k2, tmp1Reg, tmp2Reg, Assembler::le, Assembler::AVX_512bit);
     kortestdl(k2, k2);
-    jcc(Assembler::carryClear, restore_k1_return_zero);
+    jcc(Assembler::carryClear, return_zero);
 
     // All elements in current processed chunk are valid candidates for
     // compression. Write a truncated byte elements to the memory.
@@ -11015,8 +9640,6 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     bind(copy_loop_tail);
     // bail out when there is nothing to be done
     testl(tmp5, 0xFFFFFFFF);
-    // Restore k1
-    kmovql(k1, k3);
     jcc(Assembler::zero, return_length);
 
     movl(len, tmp5);
@@ -11026,24 +9649,15 @@ void MacroAssembler::char_array_compress(Register src, Register dst, Register le
     shlxl(result, result, len);
     notl(result);
 
-    kmovdl(k1, result);
+    kmovdl(k3, result);
 
-    evmovdquw(tmp1Reg, k1, Address(src, 0), Assembler::AVX_512bit);
-    evpcmpuw(k2, k1, tmp1Reg, tmp2Reg, Assembler::le, Assembler::AVX_512bit);
-    ktestd(k2, k1);
-    jcc(Assembler::carryClear, restore_k1_return_zero);
+    evmovdquw(tmp1Reg, k3, Address(src, 0), Assembler::AVX_512bit);
+    evpcmpuw(k2, k3, tmp1Reg, tmp2Reg, Assembler::le, Assembler::AVX_512bit);
+    ktestd(k2, k3);
+    jcc(Assembler::carryClear, return_zero);
 
-    evpmovwb(Address(dst, 0), k1, tmp1Reg, Assembler::AVX_512bit);
-    // Restore k1
-    kmovql(k1, k3);
+    evpmovwb(Address(dst, 0), k3, tmp1Reg, Assembler::AVX_512bit);
     jmp(return_length);
-
-    bind(restore_k1_return_zero);
-    // Restore k1
-    kmovql(k1, k3);
-    jmp(return_zero);
-
-    clear_vector_masking();   // closing of the stub context for programming mask registers
   }
   if (UseSSE42Intrinsics) {
     Label copy_32_loop, copy_16, copy_tail;
@@ -11157,8 +9771,6 @@ void MacroAssembler::byte_array_inflate(Register src, Register dst, Register len
     VM_Version::supports_avx512vlbw() &&
     VM_Version::supports_bmi2()) {
 
-    set_vector_masking();  // opening of the stub context for programming mask registers
-
     Label copy_32_loop, copy_tail;
     Register tmp3_aliased = len;
 
@@ -11191,22 +9803,15 @@ void MacroAssembler::byte_array_inflate(Register src, Register dst, Register len
     testl(tmp2, -1); // we don't destroy the contents of tmp2 here
     jcc(Assembler::zero, done);
 
-    // Save k1
-    kmovql(k2, k1);
-
     // ~(~0 << length), where length is the # of remaining elements to process
     movl(tmp3_aliased, -1);
     shlxl(tmp3_aliased, tmp3_aliased, tmp2);
     notl(tmp3_aliased);
-    kmovdl(k1, tmp3_aliased);
-    evpmovzxbw(tmp1, k1, Address(src, 0), Assembler::AVX_512bit);
-    evmovdquw(Address(dst, 0), k1, tmp1, Assembler::AVX_512bit);
+    kmovdl(k2, tmp3_aliased);
+    evpmovzxbw(tmp1, k2, Address(src, 0), Assembler::AVX_512bit);
+    evmovdquw(Address(dst, 0), k2, tmp1, Assembler::AVX_512bit);
 
-    // Restore k1
-    kmovql(k1, k2);
     jmp(done);
-
-    clear_vector_masking();   // closing of the stub context for programming mask registers
   }
   if (UseSSE42Intrinsics) {
     Label copy_16_loop, copy_8_loop, copy_bytes, copy_new_tail, copy_tail;

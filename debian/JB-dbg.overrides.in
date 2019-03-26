@@ -4,3 +4,4 @@
 
 # these are java's .debuginfo files ...
 @basename@-dbg binary: binary-with-bad-dynamic-table
+@basename@-dbg binary: statically-linked-binary

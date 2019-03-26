@@ -7,5 +7,5 @@
 # Ignore the mouse cursors
 @basename@-jre-headless binary: image-file-in-usr-lib
 
-# yes, two empty directories
+# Just an empty directory
 @basename@-jre-headless binary: debug-package-should-be-named-dbg

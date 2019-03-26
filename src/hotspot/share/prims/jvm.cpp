@@ -37,10 +37,12 @@
 #include "classfile/vmSymbols.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "interpreter/bytecode.hpp"
+#include "jfr/jfrEvents.hpp"
+#include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
 #include "memory/referenceType.hpp"
 #include "memory/resourceArea.hpp"
-#include "memory/universe.inline.hpp"
+#include "memory/universe.hpp"
 #include "oops/access.inline.hpp"
 #include "oops/fieldStreams.hpp"
 #include "oops/instanceKlass.hpp"
@@ -58,23 +60,23 @@
 #include "runtime/atomic.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/init.hpp"
-#include "runtime/interfaceSupport.hpp"
+#include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/java.hpp"
 #include "runtime/javaCalls.hpp"
 #include "runtime/jfieldIDWorkaround.hpp"
-#include "runtime/orderAccess.inline.hpp"
+#include "runtime/jniHandles.inline.hpp"
+#include "runtime/orderAccess.hpp"
 #include "runtime/os.inline.hpp"
 #include "runtime/perfData.hpp"
 #include "runtime/reflection.hpp"
 #include "runtime/thread.inline.hpp"
 #include "runtime/threadSMR.hpp"
-#include "runtime/vframe.hpp"
+#include "runtime/vframe.inline.hpp"
 #include "runtime/vm_operations.hpp"
 #include "runtime/vm_version.hpp"
 #include "services/attachListener.hpp"
 #include "services/management.hpp"
 #include "services/threadService.hpp"
-#include "trace/tracing.hpp"
 #include "utilities/copy.hpp"
 #include "utilities/defaultStream.hpp"
 #include "utilities/dtrace.hpp"
@@ -83,7 +85,6 @@
 #include "utilities/macros.hpp"
 #include "utilities/utf8.hpp"
 #if INCLUDE_CDS
-#include "classfile/sharedClassUtil.hpp"
 #include "classfile/systemDictionaryShared.hpp"
 #endif
 
@@ -167,9 +168,8 @@ static void trace_class_resolution_impl(Klass* to_class, TRAPS) {
       }
     } else if (last_caller != NULL &&
                last_caller->method_holder()->name() ==
-               vmSymbols::java_lang_ClassLoader() &&
-               (last_caller->name() == vmSymbols::loadClassInternal_name() ||
-                last_caller->name() == vmSymbols::loadClass_name())) {
+                 vmSymbols::java_lang_ClassLoader() &&
+               last_caller->name() == vmSymbols::loadClass_name()) {
       found_it = true;
     } else if (!vfst.at_end()) {
       if (vfst.method()->is_native()) {
@@ -436,6 +436,16 @@ JVM_END
 
 extern volatile jint vm_created;
 
+JVM_ENTRY_NO_ENV(void, JVM_BeforeHalt())
+  JVMWrapper("JVM_BeforeHalt");
+  EventShutdown event;
+  if (event.should_commit()) {
+    event.set_reason("Shutdown requested from Java");
+    event.commit();
+  }
+JVM_END
+
+
 JVM_ENTRY_NO_ENV(void, JVM_Halt(jint code))
   before_exit(thread);
   vm_exit(code);
@@ -620,35 +630,6 @@ JVM_ENTRY(void, JVM_MonitorNotifyAll(JNIEnv* env, jobject handle))
 JVM_END
 
 
-template<DecoratorSet decorators>
-static void fixup_clone_referent(oop src, oop new_obj) {
-  typedef HeapAccess<decorators> RefAccess;
-  const int ref_offset = java_lang_ref_Reference::referent_offset;
-  oop referent = RefAccess::oop_load_at(src, ref_offset);
-  RefAccess::oop_store_at(new_obj, ref_offset, referent);
-}
-
-static void fixup_cloned_reference(ReferenceType ref_type, oop src, oop clone) {
-  // Kludge: After unbarriered clone, re-copy the referent with
-  // correct barriers. This works for current collectors, but won't
-  // work for ZGC and maybe other future collectors or variants of
-  // existing ones (like G1 with concurrent reference processing).
-  if (ref_type == REF_PHANTOM) {
-    fixup_clone_referent<ON_PHANTOM_OOP_REF>(src, clone);
-  } else {
-    fixup_clone_referent<ON_WEAK_OOP_REF>(src, clone);
-  }
-  if ((java_lang_ref_Reference::next(clone) != NULL) ||
-      (java_lang_ref_Reference::queue(clone) == java_lang_ref_ReferenceQueue::ENQUEUED_queue())) {
-    // If the source has been enqueued or is being enqueued, don't
-    // register the clone with a queue.
-    java_lang_ref_Reference::set_queue(clone, java_lang_ref_ReferenceQueue::NULL_queue());
-  }
-  // discovered and next are list links; the clone is not in those lists.
-  java_lang_ref_Reference::set_discovered(clone, NULL);
-  java_lang_ref_Reference::set_next(clone, NULL);
-}
-
 JVM_ENTRY(jobject, JVM_Clone(JNIEnv* env, jobject handle))
   JVMWrapper("JVM_Clone");
   Handle obj(THREAD, JNIHandles::resolve_non_null(handle));
@@ -667,34 +648,27 @@ JVM_ENTRY(jobject, JVM_Clone(JNIEnv* env, jobject handle))
 #endif
 
   // Check if class of obj supports the Cloneable interface.
-  // All arrays are considered to be cloneable (See JLS 20.1.5)
-  if (!klass->is_cloneable()) {
+  // All arrays are considered to be cloneable (See JLS 20.1.5).
+  // All j.l.r.Reference classes are considered non-cloneable.
+  if (!klass->is_cloneable() ||
+      (klass->is_instance_klass() &&
+       InstanceKlass::cast(klass)->reference_type() != REF_NONE)) {
     ResourceMark rm(THREAD);
     THROW_MSG_0(vmSymbols::java_lang_CloneNotSupportedException(), klass->external_name());
   }
 
   // Make shallow object copy
-  ReferenceType ref_type = REF_NONE;
   const int size = obj->size();
   oop new_obj_oop = NULL;
   if (obj->is_array()) {
     const int length = ((arrayOop)obj())->length();
-    new_obj_oop = CollectedHeap::array_allocate(klass, size, length, CHECK_NULL);
+    new_obj_oop = Universe::heap()->array_allocate(klass, size, length,
+                                                   /* do_zero */ true, CHECK_NULL);
   } else {
-    ref_type = InstanceKlass::cast(klass)->reference_type();
-    assert((ref_type == REF_NONE) ==
-           !klass->is_subclass_of(SystemDictionary::Reference_klass()),
-           "invariant");
-    new_obj_oop = CollectedHeap::obj_allocate(klass, size, CHECK_NULL);
+    new_obj_oop = Universe::heap()->obj_allocate(klass, size, CHECK_NULL);
   }
 
   HeapAccess<>::clone(obj(), new_obj_oop, size);
-
-  // If cloning a Reference, set Reference fields to a safe state.
-  // Fixup must be completed before any safepoint.
-  if (ref_type != REF_NONE) {
-    fixup_cloned_reference(ref_type, obj(), new_obj_oop);
-  }
 
   Handle new_obj(THREAD, new_obj_oop);
   // Caution: this involves a java upcall, so the clone should be
@@ -719,16 +693,8 @@ JVM_END
 // Misc. class handling ///////////////////////////////////////////////////////////
 
 
-JVM_ENTRY(jclass, JVM_GetCallerClass(JNIEnv* env, int depth))
+JVM_ENTRY(jclass, JVM_GetCallerClass(JNIEnv* env))
   JVMWrapper("JVM_GetCallerClass");
-
-  // Pre-JDK 8 and early builds of JDK 8 don't have a CallerSensitive annotation; or
-  // sun.reflect.Reflection.getCallerClass with a depth parameter is provided
-  // temporarily for existing code to use until a replacement API is defined.
-  if (SystemDictionary::reflect_CallerSensitive_klass() == NULL || depth != JVM_CALLER_DEPTH) {
-    Klass* k = thread->security_get_caller_class(depth);
-    return (k == NULL) ? NULL : (jclass) JNIHandles::make_local(env, k->java_mirror());
-  }
 
   // Getting the class of the caller frame.
   //
@@ -881,7 +847,6 @@ JVM_ENTRY(jclass, JVM_FindClassFromClass(JNIEnv *env, const char *name,
   if (result != NULL) {
     oop mirror = JNIHandles::resolve_non_null(result);
     Klass* to_class = java_lang_Class::as_Klass(mirror);
-    ClassLoaderData::class_loader_data(h_loader())->record_dependency(to_class, CHECK_NULL);
   }
 
   if (log_is_enabled(Debug, class, resolve) && result != NULL) {
@@ -1151,7 +1116,7 @@ JVM_ENTRY(jobjectArray, JVM_GetClassSigners(JNIEnv *env, jclass cls))
     return NULL;
   }
 
-  objArrayOop signers = java_lang_Class::signers(JNIHandles::resolve_non_null(cls));
+  objArrayHandle signers(THREAD, java_lang_Class::signers(JNIHandles::resolve_non_null(cls)));
 
   // If there are no signers set in the class, or if the class
   // is an array, return NULL.
@@ -1236,11 +1201,8 @@ static bool is_authorized(Handle context, InstanceKlass* klass, TRAPS) {
 // and null permissions - which gives no permissions.
 oop create_dummy_access_control_context(TRAPS) {
   InstanceKlass* pd_klass = SystemDictionary::ProtectionDomain_klass();
-  Handle obj = pd_klass->allocate_instance_handle(CHECK_NULL);
   // Call constructor ProtectionDomain(null, null);
-  JavaValue result(T_VOID);
-  JavaCalls::call_special(&result, obj, pd_klass,
-                          vmSymbols::object_initializer_name(),
+  Handle obj = JavaCalls::construct_new_instance(pd_klass,
                           vmSymbols::codesource_permissioncollection_signature(),
                           Handle(), Handle(), CHECK_NULL);
 
@@ -1408,7 +1370,7 @@ JVM_ENTRY(jobject, JVM_GetStackAccessControlContext(JNIEnv *env, jclass cls))
       protection_domain = method->method_holder()->protection_domain();
     }
 
-    if ((previous_protection_domain != protection_domain) && (protection_domain != NULL)) {
+    if ((!oopDesc::equals(previous_protection_domain, protection_domain)) && (protection_domain != NULL)) {
       local_array->push(protection_domain);
       previous_protection_domain = protection_domain;
     }
@@ -1931,6 +1893,98 @@ JVM_ENTRY(jint, JVM_GetClassAccessFlags(JNIEnv *env, jclass cls))
 }
 JVM_END
 
+JVM_ENTRY(jboolean, JVM_AreNestMates(JNIEnv *env, jclass current, jclass member))
+{
+  JVMWrapper("JVM_AreNestMates");
+  Klass* c = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(current));
+  assert(c->is_instance_klass(), "must be");
+  InstanceKlass* ck = InstanceKlass::cast(c);
+  Klass* m = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(member));
+  assert(m->is_instance_klass(), "must be");
+  InstanceKlass* mk = InstanceKlass::cast(m);
+  return ck->has_nestmate_access_to(mk, THREAD);
+}
+JVM_END
+
+JVM_ENTRY(jclass, JVM_GetNestHost(JNIEnv* env, jclass current))
+{
+  // current is not a primitive or array class
+  JVMWrapper("JVM_GetNestHost");
+  Klass* c = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(current));
+  assert(c->is_instance_klass(), "must be");
+  InstanceKlass* ck = InstanceKlass::cast(c);
+  // Don't post exceptions if validation fails
+  InstanceKlass* host = ck->nest_host(NULL, THREAD);
+  return (jclass) (host == NULL ? NULL :
+                   JNIHandles::make_local(THREAD, host->java_mirror()));
+}
+JVM_END
+
+JVM_ENTRY(jobjectArray, JVM_GetNestMembers(JNIEnv* env, jclass current))
+{
+  // current is not a primitive or array class
+  JVMWrapper("JVM_GetNestMembers");
+  Klass* c = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(current));
+  assert(c->is_instance_klass(), "must be");
+  InstanceKlass* ck = InstanceKlass::cast(c);
+  // Get the nest host for this nest - throw ICCE if validation fails
+  Symbol* icce = vmSymbols::java_lang_IncompatibleClassChangeError();
+  InstanceKlass* host = ck->nest_host(icce, CHECK_NULL);
+
+  {
+    JvmtiVMObjectAllocEventCollector oam;
+    Array<u2>* members = host->nest_members();
+    int length = members == NULL ? 0 : members->length();
+    // nest host is first in the array so make it one bigger
+    objArrayOop r = oopFactory::new_objArray(SystemDictionary::Class_klass(),
+                                             length + 1, CHECK_NULL);
+    objArrayHandle result (THREAD, r);
+    result->obj_at_put(0, host->java_mirror());
+    if (length != 0) {
+      int i;
+      for (i = 0; i < length; i++) {
+         int cp_index = members->at(i);
+         Klass* k = host->constants()->klass_at(cp_index, CHECK_NULL);
+         if (k->is_instance_klass()) {
+           InstanceKlass* nest_host_k =
+             InstanceKlass::cast(k)->nest_host(icce, CHECK_NULL);
+           if (nest_host_k == host) {
+             result->obj_at_put(i+1, k->java_mirror());
+           }
+           else {
+             // k's nest host is legal but it isn't our host so
+             // throw ICCE
+             ResourceMark rm(THREAD);
+             Exceptions::fthrow(THREAD_AND_LOCATION,
+                                icce,
+                                "Nest member %s in %s declares a different nest host of %s",
+                                k->external_name(),
+                                host->external_name(),
+                                nest_host_k->external_name()
+                           );
+             return NULL;
+           }
+         }
+         else {
+           // we have a bad nest member entry - throw ICCE
+           ResourceMark rm(THREAD);
+           Exceptions::fthrow(THREAD_AND_LOCATION,
+                              icce,
+                              "Class %s can not be a nest member of %s",
+                              k->external_name(),
+                              host->external_name()
+                              );
+           return NULL;
+         }
+      }
+    }
+    else {
+      assert(host == ck, "must be singleton nest");
+    }
+    return (jobjectArray)JNIHandles::make_local(THREAD, result());
+  }
+}
+JVM_END
 
 // Constant pool access //////////////////////////////////////////////////////////
 
@@ -2266,6 +2320,8 @@ JVM_ENTRY(jbyte, JVM_ConstantPoolGetTagAt(JNIEnv *env, jobject obj, jobject unus
       result = JVM_CONSTANT_MethodType;
   } else if (tag.is_method_handle_in_error()) {
       result = JVM_CONSTANT_MethodHandle;
+  } else if (tag.is_dynamic_constant_in_error()) {
+      result = JVM_CONSTANT_Dynamic;
   }
   return result;
 }
@@ -2713,23 +2769,19 @@ extern "C" {
 
 ATTRIBUTE_PRINTF(3, 0)
 int jio_vsnprintf(char *str, size_t count, const char *fmt, va_list args) {
-  // see bug 4399518, 4417214
+  // Reject count values that are negative signed values converted to
+  // unsigned; see bug 4399518, 4417214
   if ((intptr_t)count <= 0) return -1;
 
-  int result = vsnprintf(str, count, fmt, args);
-  // Note: on truncation vsnprintf(3) on Unix returns numbers of
-  // characters which would have been written had the buffer been large
-  // enough; on Windows, it returns -1. We handle both cases here and
-  // always return -1, and perform null termination.
-  if ((result > 0 && (size_t)result >= count) || result == -1) {
-    str[count - 1] = '\0';
+  int result = os::vsnprintf(str, count, fmt, args);
+  if (result > 0 && (size_t)result >= count) {
     result = -1;
   }
 
   return result;
 }
 
-ATTRIBUTE_PRINTF(3, 0)
+ATTRIBUTE_PRINTF(3, 4)
 int jio_snprintf(char *str, size_t count, const char *fmt, ...) {
   va_list args;
   int len;
@@ -2739,7 +2791,7 @@ int jio_snprintf(char *str, size_t count, const char *fmt, ...) {
   return len;
 }
 
-ATTRIBUTE_PRINTF(2,3)
+ATTRIBUTE_PRINTF(2, 3)
 int jio_fprintf(FILE* f, const char *fmt, ...) {
   int len;
   va_list args;
@@ -2768,15 +2820,14 @@ JNIEXPORT int jio_printf(const char *fmt, ...) {
   return len;
 }
 
-
 // HotSpot specific jio method
-void jio_print(const char* s) {
+void jio_print(const char* s, size_t len) {
   // Try to make this function as atomic as possible.
   if (Arguments::vfprintf_hook() != NULL) {
-    jio_fprintf(defaultStream::output_stream(), "%s", s);
+    jio_fprintf(defaultStream::output_stream(), "%.*s", (int)len, s);
   } else {
     // Make an unused local variable to avoid warning from gcc 4.x compiler.
-    size_t count = ::write(defaultStream::output_fd(), s, (int)strlen(s));
+    size_t count = ::write(defaultStream::output_fd(), s, (int)len);
   }
 }
 
@@ -3022,6 +3073,12 @@ JVM_ENTRY(void, JVM_Yield(JNIEnv *env, jclass threadClass))
   os::naked_yield();
 JVM_END
 
+static void post_thread_sleep_event(EventThreadSleep* event, jlong millis) {
+  assert(event != NULL, "invariant");
+  assert(event->should_commit(), "invariant");
+  event->set_time(millis);
+  event->commit();
+}
 
 JVM_ENTRY(void, JVM_Sleep(JNIEnv* env, jclass threadClass, jlong millis))
   JVMWrapper("JVM_Sleep");
@@ -3039,7 +3096,6 @@ JVM_ENTRY(void, JVM_Sleep(JNIEnv* env, jclass threadClass, jlong millis))
   JavaThreadSleepState jtss(thread);
 
   HOTSPOT_THREAD_SLEEP_BEGIN(millis);
-
   EventThreadSleep event;
 
   if (millis == 0) {
@@ -3052,8 +3108,7 @@ JVM_ENTRY(void, JVM_Sleep(JNIEnv* env, jclass threadClass, jlong millis))
       // us while we were sleeping. We do not overwrite those.
       if (!HAS_PENDING_EXCEPTION) {
         if (event.should_commit()) {
-          event.set_time(millis);
-          event.commit();
+          post_thread_sleep_event(&event, millis);
         }
         HOTSPOT_THREAD_SLEEP_END(1);
 
@@ -3065,8 +3120,7 @@ JVM_ENTRY(void, JVM_Sleep(JNIEnv* env, jclass threadClass, jlong millis))
     thread->osthread()->set_state(old_state);
   }
   if (event.should_commit()) {
-    event.set_time(millis);
-    event.commit();
+    post_thread_sleep_event(&event, millis);
   }
   HOTSPOT_THREAD_SLEEP_END(0);
 JVM_END

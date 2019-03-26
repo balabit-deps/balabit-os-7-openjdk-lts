@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,8 +27,11 @@
 
 #include "jvm.h"
 #include "jvmtifiles/jvmti.h"
+#include "metaprogramming/isRegisteredEnum.hpp"
+#include "metaprogramming/integralConstant.hpp"
 #include "runtime/extendedPC.hpp"
-#include "runtime/handles.hpp"
+#include "utilities/exceptions.hpp"
+#include "utilities/ostream.hpp"
 #include "utilities/macros.hpp"
 #ifndef _WINDOWS
 # include <setjmp.h>
@@ -52,6 +55,7 @@ class Event;
 class DLL;
 class FileHandle;
 class NativeCallStack;
+class methodHandle;
 
 template<class E> class GrowableArray;
 
@@ -163,7 +167,7 @@ class os: AllStatic {
 
   // File names are case-insensitive on windows only
   // Override me as needed
-  static int    file_name_strcmp(const char* s1, const char* s2);
+  static int    file_name_strncmp(const char* s1, const char* s2, size_t num);
 
   // unset environment variable
   static bool unsetenv(const char* name);
@@ -229,6 +233,10 @@ class os: AllStatic {
   static bool has_allocatable_memory_limit(julong* limit);
   static bool is_server_class_machine();
 
+  // Returns the id of the processor on which the calling thread is currently executing.
+  // The returned value is guaranteed to be between 0 and (os::processor_count() - 1).
+  static uint processor_id();
+
   // number of CPUs
   static int processor_count() {
     return _processor_count;
@@ -269,6 +277,10 @@ class os: AllStatic {
   static void map_stack_shadow_pages(address sp);
   static bool stack_shadow_pages_available(Thread *thread, const methodHandle& method, address sp);
 
+  // Find committed memory region within specified range (start, start + size),
+  // return true if found any
+  static bool committed_in_range(address start, size_t size, address& committed_start, size_t& committed_size);
+
   // OS interface to Virtual Memory
 
   // Return the default page size.
@@ -289,6 +301,9 @@ class os: AllStatic {
     // The _page_sizes array is sorted in descending order.
     return _page_sizes[0];
   }
+
+  // Return a lower bound for page sizes. Also works before os::init completed.
+  static size_t min_page_size() { return 4 * K; }
 
   // Methods for tracing page sizes returned by the above method.
   // The region_{min,max}_size parameters should be the values
@@ -399,6 +414,10 @@ class os: AllStatic {
   static bool    is_poll_address(address addr)  { return addr >= _polling_page && addr < (_polling_page + os::vm_page_size()); }
   static void    make_polling_page_unreadable();
   static void    make_polling_page_readable();
+
+  // Check if pointer points to readable memory (by 4-byte read access)
+  static bool    is_readable_pointer(const void* p);
+  static bool    is_readable_range(const void* from, const void* to);
 
   // Routines used to serialize the thread state without using membars
   static void    serialize_thread_states();
@@ -523,7 +542,7 @@ class os: AllStatic {
   static char* do_you_want_to_debug(const char* message);
 
   // run cmd in a separate process and return its exit code; or -1 on failures
-  static int fork_and_exec(char *cmd);
+  static int fork_and_exec(char *cmd, bool use_vfork_if_available = false);
 
   // Call ::exit() on all platforms but Windows
   static void exit(int num);
@@ -543,8 +562,12 @@ class os: AllStatic {
   static const int default_file_open_flags();
   static int open(const char *path, int oflag, int mode);
   static FILE* open(int fd, const char* mode);
+  static FILE* fopen(const char* path, const char* mode);
   static int close(int fd);
   static jlong lseek(int fd, jlong offset, int whence);
+  // This function, on Windows, canonicalizes a given path (see os_windows.cpp for details).
+  // On Posix, this function is a noop: it does not change anything and just returns
+  // the input pointer.
   static char* native_path(char *path);
   static int ftruncate(int fd, jlong length);
   static int fsync(int fd);
@@ -637,8 +660,10 @@ class os: AllStatic {
   static void *find_agent_function(AgentLibrary *agent_lib, bool check_lib,
                                    const char *syms[], size_t syms_len);
 
-  // Write to stream
-  static int log_vsnprintf(char* buf, size_t len, const char* fmt, va_list args) ATTRIBUTE_PRINTF(3, 0);
+  // Provide C99 compliant versions of these functions, since some versions
+  // of some platforms don't.
+  static int vsnprintf(char* buf, size_t len, const char* fmt, va_list args) ATTRIBUTE_PRINTF(3, 0);
+  static int snprintf(char* buf, size_t len, const char* fmt, ...) ATTRIBUTE_PRINTF(3, 4);
 
   // Get host name in buffer provided
   static bool get_host_name(char* buf, size_t buflen);
@@ -717,9 +742,6 @@ class os: AllStatic {
   // Fills in path to jvm.dll/libjvm.so (used by the Disassembler)
   static void     jvm_path(char *buf, jint buflen);
 
-  // Returns true if we are running in a headless jre.
-  static bool     is_headless_jre();
-
   // JNI names
   static void     print_jni_name_prefix_on(outputStream* st, int args_size);
   static void     print_jni_name_suffix_on(outputStream* st, int args_size);
@@ -772,13 +794,11 @@ class os: AllStatic {
   static struct hostent* get_host_by_name(char* name);
 
   // Support for signals (see JVM_RaiseSignal, JVM_RegisterSignal)
-  static void  signal_init(TRAPS);
-  static void  signal_init_pd();
+  static void  initialize_jdk_signal_support(TRAPS);
   static void  signal_notify(int signal_number);
   static void* signal(int signal_number, void* handler);
   static void  signal_raise(int signal_number);
   static int   signal_wait();
-  static int   signal_lookup();
   static void* user_handler();
   static void  terminate_signal_thread();
   static int   sigexitnum_pd();
@@ -911,11 +931,11 @@ class os: AllStatic {
   class SuspendedThreadTask {
   public:
     SuspendedThreadTask(Thread* thread) : _thread(thread), _done(false) {}
-    virtual ~SuspendedThreadTask() {}
     void run();
     bool is_done() { return _done; }
     virtual void do_task(const SuspendedThreadTaskContext& context) = 0;
   protected:
+    ~SuspendedThreadTask() {}
   private:
     void internal_do_task();
     Thread* _thread;
@@ -1009,6 +1029,10 @@ class os: AllStatic {
   static bool set_boot_path(char fileSep, char pathSep);
 
 };
+
+#ifndef _WINDOWS
+template<> struct IsRegisteredEnum<os::SuspendResume::State> : public TrueType {};
+#endif // !_WINDOWS
 
 // Note that "PAUSE" is almost always used with synchronization
 // so arguably we should provide Atomic::SpinPause() instead

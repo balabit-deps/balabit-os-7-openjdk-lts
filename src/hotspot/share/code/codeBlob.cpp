@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,9 @@
 #include "jvm.h"
 #include "code/codeBlob.hpp"
 #include "code/codeCache.hpp"
+#include "code/icBuffer.hpp"
 #include "code/relocInfo.hpp"
+#include "code/vtableStubs.hpp"
 #include "compiler/disassembler.hpp"
 #include "interpreter/bytecode.hpp"
 #include "memory/allocation.inline.hpp"
@@ -35,7 +37,7 @@
 #include "oops/oop.inline.hpp"
 #include "prims/forte.hpp"
 #include "runtime/handles.inline.hpp"
-#include "runtime/interfaceSupport.hpp"
+#include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -294,6 +296,28 @@ AdapterBlob* AdapterBlob::create(CodeBuffer* cb) {
   return blob;
 }
 
+VtableBlob::VtableBlob(const char* name, int size) :
+  BufferBlob(name, size) {
+}
+
+VtableBlob* VtableBlob::create(const char* name, int buffer_size) {
+  ThreadInVMfromUnknown __tiv;  // get to VM state in case we block on CodeCache_lock
+
+  VtableBlob* blob = NULL;
+  unsigned int size = sizeof(VtableBlob);
+  // align the size to CodeEntryAlignment
+  size = align_code_offset(size);
+  size += align_up(buffer_size, oopSize);
+  assert(name != NULL, "must provide a name");
+  {
+    MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    blob = new (size) VtableBlob(name, size);
+  }
+  // Track memory usage statistic after releasing CodeCache_lock
+  MemoryService::track_code_cache_memory_usage();
+
+  return blob;
+}
 
 //----------------------------------------------------------------------------------------------------
 // Implementation of MethodHandlesAdapterBlob
@@ -535,6 +559,67 @@ void CodeBlob::print_on(outputStream* st) const {
 
 void CodeBlob::print_value_on(outputStream* st) const {
   st->print_cr("[CodeBlob]");
+}
+
+void CodeBlob::dump_for_addr(address addr, outputStream* st, bool verbose) const {
+  if (is_buffer_blob()) {
+    // the interpreter is generated into a buffer blob
+    InterpreterCodelet* i = Interpreter::codelet_containing(addr);
+    if (i != NULL) {
+      st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an Interpreter codelet", p2i(addr), (int)(addr - i->code_begin()));
+      i->print_on(st);
+      return;
+    }
+    if (Interpreter::contains(addr)) {
+      st->print_cr(INTPTR_FORMAT " is pointing into interpreter code"
+                   " (not bytecode specific)", p2i(addr));
+      return;
+    }
+    //
+    if (AdapterHandlerLibrary::contains(this)) {
+      st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an AdapterHandler", p2i(addr), (int)(addr - code_begin()));
+      AdapterHandlerLibrary::print_handler_on(st, this);
+    }
+    // the stubroutines are generated into a buffer blob
+    StubCodeDesc* d = StubCodeDesc::desc_for(addr);
+    if (d != NULL) {
+      st->print_cr(INTPTR_FORMAT " is at begin+%d in a stub", p2i(addr), (int)(addr - d->begin()));
+      d->print_on(st);
+      st->cr();
+      return;
+    }
+    if (StubRoutines::contains(addr)) {
+      st->print_cr(INTPTR_FORMAT " is pointing to an (unnamed) stub routine", p2i(addr));
+      return;
+    }
+    // the InlineCacheBuffer is using stubs generated into a buffer blob
+    if (InlineCacheBuffer::contains(addr)) {
+      st->print_cr(INTPTR_FORMAT " is pointing into InlineCacheBuffer", p2i(addr));
+      return;
+    }
+    VtableStub* v = VtableStubs::stub_containing(addr);
+    if (v != NULL) {
+      st->print_cr(INTPTR_FORMAT " is at entry_point+%d in a vtable stub", p2i(addr), (int)(addr - v->entry_point()));
+      v->print_on(st);
+      st->cr();
+      return;
+    }
+  }
+  if (is_nmethod()) {
+    nmethod* nm = (nmethod*)this;
+    ResourceMark rm;
+    st->print(INTPTR_FORMAT " is at entry_point+%d in (nmethod*)" INTPTR_FORMAT,
+              p2i(addr), (int)(addr - nm->entry_point()), p2i(nm));
+    if (verbose) {
+      st->print(" for ");
+      nm->method()->print_value_on(st);
+    }
+    st->cr();
+    nm->print_nmethod(verbose);
+    return;
+  }
+  st->print_cr(INTPTR_FORMAT " is at code_begin+%d in ", p2i(addr), (int)(addr - code_begin()));
+  print_on(st);
 }
 
 void RuntimeBlob::verify() {

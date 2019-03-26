@@ -1,62 +1,124 @@
-openjdk-lts (10.0.2+13-1ubuntu0.18.04.4) bionic-security; urgency=medium
+openjdk-lts (11.0.2+9-3ubuntu1~18.04.3) bionic-security; urgency=medium
 
-  * debian/patches/sec-webrev-11.0.1-b21-S8211731.patch: apply missing
-    patch from the security update. (LP: #1800792)
+  * Backport from Disco. LP: #1814133.
+  * Revert to GTK2 as default as GTK3 still has padding and component issues,
+    apply upstream changeset to fix a few GTK3 components: LP: #1770278.
+    - debian/patches/jdk-improve-gtk3-compatibility.patch: upstream fix for
+      JDK-8218469, JDK-8218470, JDK-8218472, and JDK-8203627.
+    - debian/patches/keep-gtk2-as-default.patch: revert upstream so GTK2 is
+      loaded before GTK3 when available.
+    - debian/rules, debian/control: remove libgtk-3-dev from build depends
+      as it is not required for building; set jre to depend on libgtk2.0-0
+      and alternatively to libgtk-3-0.
+  * Adds breaks clause to prevent openjdk-11-jre-headless from being updated
+    when jetty9, netbeans, tomcat8, or visualvm are being hold back in
+    unattended-upgrades due to local conffiles changes.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 13 Nov 2018 12:53:39 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 26 Mar 2019 20:57:06 +0000
 
-openjdk-lts (10.0.2+13-1ubuntu0.18.04.3) bionic-security; urgency=medium
+openjdk-lts (11.0.2+9-3ubuntu1) disco; urgency=medium
 
-  * Security update. Backport security patches from 11.0.1-b12.
-    - CVE-2018-3136, S8194534: Manifest better support.
-    - CVE-2018-3139, S8196902: Better HTTP Redirection.
-    - CVE-2018-3150, S8199171, S8199172: Improve jar attribute checks.
-    - CVE-2018-3149, S8199177: Enhance JNDI lookups.
-    - CVE-2018-3169, S8199226: Improve field accesses.
-    - CVE-2018-3180, S8202613: Improve TLS connections stability.
-    - CVE-2018-3183, S8202936: Improve script engine support.
-    - S8195868, S8199110: Address Internet Addresses.
-    - S8195874: Improve jar specification adherence.
-    - S8201756: Improve cipher inputs.
-    - S8203654: Improve cypher state updates.
-    - S8204497: Better formatting of decimals.
-  * debian/patches/jdk-freetypeScaler-crash.diff: removed as this patch causes
-    a memory leak - upstream fixed it in openjdk-7, albeit in a different way.
-  * debian/rules: fix TIME definition.
+  * Sync packages with 11.0.2+9-3:
+    - Fix Zero on sparc64 (Adrian Glaubitz). Closes: #920315.
+    - Link zero on alpha with --no-relax (Michael Cree). Addresses: #920161.
+    - Don't run the tests on alpha, causing build failure.
+    - jhsdb isn't built on alpha.
+    - Backport the fix for 8214002 (cannot use italic font style if the font
+      has embedded bitmap). LP: #1799014.
+  * Sync packages with 11.0.2+9-2:
+    - Fix file permissions for autopkg tests.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Sun, 07 Oct 2018 15:06:09 +0000
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 24 Jan 2019 15:14:20 +0100
 
-openjdk-lts (10.0.2+13-1ubuntu0.18.04.2) bionic-security; urgency=medium
+openjdk-lts (11.0.2+9-1ubuntu3) disco; urgency=medium
 
-  * debian/rules: by default leave atk disabled, move accessibility bridge to
-    recommends. LP: #1788250. LP: #1788267.
-  * debian/control.in, debian/control: move accessibility bridge to
-    recommends.
+  * Fix file permissions for autopkg tests.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Fri, 24 Aug 2018 17:36:24 +0000
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 22 Jan 2019 14:39:45 +0100
 
-openjdk-lts (10.0.2+13-1ubuntu0.18.04.1) bionic-security; urgency=medium
+openjdk-lts (11.0.2+9-1ubuntu1) disco; urgency=medium
 
-  * Backport from Cosmic. Update to 10.0.2+13. LP: #1776332.
-  * debian/control: regenerated for Bionic, add testng and libguava-java as
-    build dependencies (guava is necessary due to a testng bug).
-  * debian/control.in: add testng and libguava-java as build dependencies.
-  * debian/rules:
-    - copy accessibility files to conf/ (thanks to Samuel Thibault).
-    - update test rules, set output to jtreg-test-output/ as test/ belongs
-      to openjdk source, add jaxp and nashorn, use ProblemList.txt from
-      each testsuite as the exclude list for jtreg, update regex to include
-      into the tarball failed jcstress tests in the Test.java#id123 format,
-      create a tarball with the JTreport directory, add guava jar file to
-      the test classpath.
-    - configure with --with-native-debug-symbols=external as this is closer
-      to the old debug/strip code and strips libjvm.so before jlink'ing it
-      into java.base.jmod. Closes: #905575.
-  * debian/excludelist.jdk.jtx, excludelist.langtools.jtx: removed, tests
-    now rely on the ProblemList.txt exclusion list that is included in-tree
-    and maintained upstream.
+  * Sync packages with 11.0.2+9-1:
+    - OpenJDK 11.0.2 release (build 9).
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Fri, 03 Aug 2018 01:53:46 +0000
+    - Backport the fix for S8212233. Closes: #920020, #919798.
+    - debian/buildwatch.sh: use same code from openjdk-8.
+    - debian/control.in, debian/control:
+      - add fixed build depends for jtreg and xfvb.
+      - remove Conflicts: oracle-java11-installer. (LP: #1782630)
+    - debian/rules:
+      - call the same testsuites scripts used for autopkgtest.
+      - removed jtreg and xvfb build dependency logic and moved the bdeps
+        into debian/control.in.
+      - added gen-autopackage rule to generate autopkgtest scripts from
+        templates.
+      - copy flight recorder configuration files.
+      - fix logging in langtools testing.
+      - don't ignore/exclude the release file from the jdk package, it is
+        required by jtreg tests and autopkgtests will fail without it.
+      - don't run nashorn testsuite.
+    - update dep8 tests:
+      - debian/tests/control: updated to run openjdk-11 tests.
+      - debian/tests/hotspot, debian/tests/jaxp, debian/tests/jdk,
+        debian/tests/langtools: use the new jt .sh scripts.
+      - debian/tests/jtdiff-autopkgtest.sh: diff build time and autopkgtest
+        JTreports to show what changed.
+      - debian/tests/jtreg-autopkgtest.in: template to generate the jtreg
+        script used by the autopkgtest tests.
+      - debian/tests/jtdiff-autopkgtest.sh: used by the scripts to report
+        any differences between the autopkgtest and the tests results
+        generated during the openjdk package build.
+      - debian/tests/jtreg-autopkgtest.sh: used by the scripts to run jtreg
+        and put the resulting artifacts in the right places, by default will
+        remove all non .jtr files after it is done to preserve space.
+      - debian/tests/hotspot, debian/tests/jaxp, debian/tests/jdk,
+        debian/tests/langtools: run same testsuites as build time and
+        compare the results.
+      - debian/tests/valid-tests: no longer needed, removed.
+
+  * Sync packages with 11.0.2+7-1:
+    - OpenJDK 11.0.2 release.
+
+    - Update VCS attributes in the control file. Closes: #909736.
+    - Prefer OpenJDK 11 over OpenJDK 10 as the bootstrap OpenJDK for
+      recent releases. Closes: #915600.
+
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 22 Jan 2019 13:30:45 +0100
+
+openjdk-lts (11.0.1+13-3ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.1+13-3:
+    - Tighten dependency on debhelper on recent releases. Closes: #911694.
+    - Reproducible properties file header when SOURCE_DATE_EPOCH is specified.
+      Closes: #914278.
+    - Add SOURCE_DATE_EPOCH support to the javadoc tool. Closes: #783938.
+    - Disable AArch64 intrinsics for sin, cos and log. Closes: #910188.
+      LP: #1796982.
+    - Add support for DEB_BUILD_OPTIONS=terse. Closes: #912211.
+
+ -- Matthias Klose <doko@ubuntu.com>  Fri, 30 Nov 2018 12:15:34 +0100
+
+openjdk-lts (11.0.1+13-2ubuntu1) cosmic; urgency=medium
+
+  * Sync packages with 11.0.1+13-2:
+    - OpenJDK 11.0.1 releae
+    - debian/rules:
+      - limit the tests that we run for the hotspot, langtools,
+        and jdk testsuites to improve build times and also to
+        prevent running unstable or failing tests.
+      - fix 'if' clause for definition of the TIME command.
+      - remove guava jar from test classpath, no longer required.
+    - debian/control, debian/control.in: add a breaks clause to
+      clojure1.8 <= 1.8.0-7ubuntu1~.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 17 Oct 2018 09:19:23 +0200
+
+openjdk-lts (11~28-3ubuntu1) cosmic; urgency=medium
+
+  * Sync packages with 11~28-3.
+  * First OpenJDK 11 release.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 03 Oct 2018 04:16:04 +0200
 
 openjdk-lts (10.0.2+13-1ubuntu1) cosmic; urgency=medium
 
