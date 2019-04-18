@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,10 +33,13 @@
 #include "compiler/compileBroker.hpp"
 #include "compiler/compileTask.hpp"
 #include "memory/resourceArea.hpp"
+#include "oops/klass.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "runtime/flags/flagSetting.hpp"
 #include "runtime/handles.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/jniHandles.inline.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/copy.hpp"
 
@@ -1226,8 +1229,9 @@ class ClassHierarchyWalker {
     } else if (!k->is_instance_klass()) {
       return false; // no methods to find in an array type
     } else {
-      // Search class hierarchy first.
-      Method* m = InstanceKlass::cast(k)->find_instance_method(_name, _signature);
+      // Search class hierarchy first, skipping private implementations
+      // as they never override any inherited methods
+      Method* m = InstanceKlass::cast(k)->find_instance_method(_name, _signature, Klass::skip_private);
       if (!Dependencies::is_concrete_method(m, k)) {
         // Check for re-abstraction of method
         if (!k->is_interface() && m != NULL && m->is_abstract()) {
@@ -1837,18 +1841,18 @@ Klass* Dependencies::check_has_no_finalizable_subclasses(Klass* ctxk, KlassDepCh
 }
 
 Klass* Dependencies::check_call_site_target_value(oop call_site, oop method_handle, CallSiteDepChange* changes) {
-  assert(!oopDesc::is_null(call_site), "sanity");
-  assert(!oopDesc::is_null(method_handle), "sanity");
+  assert(call_site != NULL, "sanity");
+  assert(method_handle != NULL, "sanity");
   assert(call_site->is_a(SystemDictionary::CallSite_klass()),     "sanity");
 
   if (changes == NULL) {
     // Validate all CallSites
-    if (java_lang_invoke_CallSite::target(call_site) != method_handle)
+    if (!oopDesc::equals(java_lang_invoke_CallSite::target(call_site), method_handle))
       return call_site->klass();  // assertion failed
   } else {
     // Validate the given CallSite
-    if (call_site == changes->call_site() && java_lang_invoke_CallSite::target(call_site) != changes->method_handle()) {
-      assert(method_handle != changes->method_handle(), "must be");
+    if (oopDesc::equals(call_site, changes->call_site()) && !oopDesc::equals(java_lang_invoke_CallSite::target(call_site), changes->method_handle())) {
+      assert(!oopDesc::equals(method_handle, changes->method_handle()), "must be");
       return call_site->klass();  // assertion failed
     }
   }

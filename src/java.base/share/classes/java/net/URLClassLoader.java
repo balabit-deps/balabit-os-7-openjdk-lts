@@ -105,7 +105,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @exception  SecurityException  if a security manager exists and its
      *             {@code checkCreateClassLoader} method doesn't allow
      *             creation of a class loader.
-     * @exception  NullPointerException if {@code urls} is {@code null}.
+     * @exception  NullPointerException if {@code urls} or any of its
+     *             elements is {@code null}.
      * @see SecurityManager#checkCreateClassLoader
      */
     public URLClassLoader(URL[] urls, ClassLoader parent) {
@@ -149,7 +150,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @exception  SecurityException  if a security manager exists and its
      *             {@code checkCreateClassLoader} method doesn't allow
      *             creation of a class loader.
-     * @exception  NullPointerException if {@code urls} is {@code null}.
+     * @exception  NullPointerException if {@code urls} or any of its
+     *             elements is {@code null}.
      * @see SecurityManager#checkCreateClassLoader
      */
     public URLClassLoader(URL[] urls) {
@@ -192,7 +194,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @exception  SecurityException  if a security manager exists and its
      *             {@code checkCreateClassLoader} method doesn't allow
      *             creation of a class loader.
-     * @exception  NullPointerException if {@code urls} is {@code null}.
+     * @exception  NullPointerException if {@code urls} or any of its
+     *             elements is {@code null}.
      * @see SecurityManager#checkCreateClassLoader
      */
     public URLClassLoader(URL[] urls, ClassLoader parent,
@@ -221,7 +224,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @param  parent the parent class loader for delegation
      *
      * @throws IllegalArgumentException if the given name is empty.
-     * @throws NullPointerException if {@code urls} is {@code null}.
+     * @throws NullPointerException if {@code urls} or any of its
+     *         elements is {@code null}.
      *
      * @throws SecurityException if a security manager exists and its
      *         {@link SecurityManager#checkCreateClassLoader()} method doesn't
@@ -256,7 +260,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @param  factory the URLStreamHandlerFactory to use when creating URLs
      *
      * @throws IllegalArgumentException if the given name is empty.
-     * @throws NullPointerException if {@code urls} is {@code null}.
+     * @throws NullPointerException if {@code urls} or any of its
+     *         elements is {@code null}.
      *
      * @throws SecurityException if a security manager exists and its
      *         {@code checkCreateClassLoader} method doesn't allow
@@ -565,13 +570,13 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * @spec JPMS
      */
     protected Package definePackage(String name, Manifest man, URL url) {
-        String path = name.replace('.', '/').concat("/");
         String specTitle = null, specVersion = null, specVendor = null;
         String implTitle = null, implVersion = null, implVendor = null;
         String sealed = null;
         URL sealBase = null;
 
-        Attributes attr = man.getAttributes(path);
+        Attributes attr = SharedSecrets.javaUtilJarAccess()
+                .getTrustedAttributes(man, name.replace('.', '/').concat("/"));
         if (attr != null) {
             specTitle   = attr.getValue(Name.SPECIFICATION_TITLE);
             specVersion = attr.getValue(Name.SPECIFICATION_VERSION);
@@ -615,10 +620,12 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
     /*
      * Returns true if the specified package name is sealed according to the
      * given manifest.
+     *
+     * @throws SecurityException if the package name is untrusted in the manifest
      */
     private boolean isSealed(String name, Manifest man) {
-        String path = name.replace('.', '/').concat("/");
-        Attributes attr = man.getAttributes(path);
+        Attributes attr = SharedSecrets.javaUtilJarAccess()
+                .getTrustedAttributes(man, name.replace('.', '/').concat("/"));
         String sealed = null;
         if (attr != null) {
             sealed = attr.getValue(Name.SEALED);
@@ -759,7 +766,7 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
             path = ParseUtil.decode(path);
             if (path.endsWith(File.separator))
                 path += "-";
-            p =  new FilePermission(path, SecurityConstants.FILE_READ_ACTION);
+            p = new FilePermission(path, SecurityConstants.FILE_READ_ACTION);
         } else {
             /**
              * Not loading from a 'file:' URL so we want to give the class
@@ -805,7 +812,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      *
      * @param urls the URLs to search for classes and resources
      * @param parent the parent class loader for delegation
-     * @exception  NullPointerException if {@code urls} is {@code null}.
+     * @exception  NullPointerException if {@code urls} or any of its
+     *             elements is {@code null}.
      * @return the resulting class loader
      */
     public static URLClassLoader newInstance(final URL[] urls,
@@ -831,7 +839,8 @@ public class URLClassLoader extends SecureClassLoader implements Closeable {
      * loading the class.
      *
      * @param urls the URLs to search for classes and resources
-     * @exception  NullPointerException if {@code urls} is {@code null}.
+     * @exception  NullPointerException if {@code urls} or any of its
+     *             elements is {@code null}.
      * @return the resulting class loader
      */
     public static URLClassLoader newInstance(final URL[] urls) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -126,9 +126,11 @@ dbgsysSend(int fd, char *buf, size_t nBytes, int flags) {
     return rv;
 }
 
-struct hostent *
-dbgsysGetHostByName(char *hostname) {
-    return gethostbyname(hostname);
+int
+dbgsysGetAddrInfo(char *hostname, char *service,
+                  struct addrinfo *hints,
+                  struct addrinfo **results) {
+    return getaddrinfo(hostname, service, hints, results);
 }
 
 unsigned short
@@ -143,9 +145,15 @@ dbgsysSocket(int domain, int type, int protocol) {
 
 int dbgsysSocketClose(int fd) {
     int rv;
+
+    /* AIX recommends to repeat the close call on EINTR */
+#if defined(_AIX)
     do {
         rv = close(fd);
     } while (rv == -1 && errno == EINTR);
+#else
+    rv = close(fd);
+#endif
 
     return rv;
 }

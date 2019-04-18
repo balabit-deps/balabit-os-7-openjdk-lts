@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -69,13 +69,15 @@ public class CreateMultiReleaseTestJars {
             + "        return 9;\n"
             + "    }\n"
             + "}\n";
-    final private String java10 = java8.replace("8", "10");
+    final int currentVersion = Runtime.version().major();
+    final String currentVersionStr = Integer.toString(currentVersion);
+    final private String javaCurrent = java8.replace("8", currentVersionStr);
     final String readme8 = "This is the root readme file";
     final String readme9 = "This is the version nine readme file";
-    final String readme10 = "This is the version ten readme file";
+    final String readmeCurrent = "This is the current version readme file";
     private Map<String,byte[]> rootClasses;
     private Map<String,byte[]> version9Classes;
-    private Map<String,byte[]> version10Classes;
+    private Map<String,byte[]> versionCurrentClasses;
 
     public void buildUnversionedJar() throws IOException {
         JarBuilder jb = new JarBuilder("unversioned.jar");
@@ -134,12 +136,18 @@ public class CreateMultiReleaseTestJars {
         jb.addEntry("META-INF/versions/9/version/Version.java", java9.getBytes());
         jb.addEntry("META-INF/versions/9/version/PackagePrivate.java", ppjava9.getBytes());
         jb.addEntry("META-INF/versions/9/version/PackagePrivate.class", version9Classes.get("version.PackagePrivate"));
-        jb.addEntry("META-INF/versions/10/README", readme10.getBytes());
-        jb.addEntry("META-INF/versions/10/version/Version.java", java10.getBytes());
-        jb.addEntry("META-INF/versions/10/version/Version.class", version10Classes.get("version.Version"));
+        jb.addEntry("META-INF/versions/" + currentVersionStr + "/README", readmeCurrent.getBytes());
+        jb.addEntry("META-INF/versions/" + currentVersionStr + "/version/Version.java", javaCurrent.getBytes());
+        jb.addEntry("META-INF/versions/" + currentVersionStr + "/version/Version.class", versionCurrentClasses.get("version.Version"));
     }
 
     public void buildSignedMultiReleaseJar() throws Exception {
+        buildSignedMultiReleaseJar("multi-release.jar", "signed-multi-release.jar");
+    }
+
+    public void buildSignedMultiReleaseJar(String multiReleaseJar,
+                                           String signedMultiReleaseJar) throws Exception
+    {
         String testsrc = System.getProperty("test.src",".");
         String testdir = findTestDir(testsrc);
         String keystore = testdir + "/sun/security/tools/jarsigner/JarSigning.keystore";
@@ -153,8 +161,8 @@ public class CreateMultiReleaseTestJars {
         CertPath cp = CertificateFactory.getInstance("X.509")
                 .generateCertPath(Arrays.asList(ks.getCertificateChain("b")));
         JarSigner js = new JarSigner.Builder(pkb, cp).build();
-        try (ZipFile in = new ZipFile("multi-release.jar");
-             FileOutputStream os = new FileOutputStream("signed-multi-release.jar"))
+        try (ZipFile in = new ZipFile(multiReleaseJar);
+             FileOutputStream os = new FileOutputStream(signedMultiReleaseJar))
         {
             js.sign(in, os);
         }
@@ -186,7 +194,7 @@ public class CreateMultiReleaseTestJars {
         input.put("version.PackagePrivate", ppjava9);
         version9Classes = (new Compiler(input)).setRelease(9).compile();
         input.clear();
-        input.put("version.Version", java10);
-        version10Classes = (new Compiler(input)).setRelease(9).compile();  // fixme in JDK 10
+        input.put("version.Version", javaCurrent);
+        versionCurrentClasses = (new Compiler(input)).compile();  // Use default release
     }
 }

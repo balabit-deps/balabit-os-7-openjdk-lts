@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -77,8 +77,13 @@ inline frame::frame(void* sp, void* pc, void* unextended_sp) :
 #endif
 
 // template interpreter state
-inline frame::z_ijava_state* frame::ijava_state() const {
+inline frame::z_ijava_state* frame::ijava_state_unchecked() const {
   z_ijava_state* state = (z_ijava_state*) ((uintptr_t)fp() - z_ijava_state_size);
+  return state;
+}
+
+inline frame::z_ijava_state* frame::ijava_state() const {
+  z_ijava_state* state = ijava_state_unchecked();
   assert(state->magic == (intptr_t) frame::z_istate_magic_number,
          "wrong z_ijava_state in interpreter frame (no magic found)");
   return state;
@@ -173,10 +178,6 @@ inline intptr_t* frame::interpreter_frame_mdp_addr() const {
 // Bottom(base) of the expression stack (highest address).
 inline intptr_t* frame::interpreter_frame_expression_stack() const {
   return (intptr_t*)interpreter_frame_monitor_end() - 1;
-}
-
-inline jint frame::interpreter_frame_expression_stack_direction() {
-  return -1;
 }
 
 inline intptr_t* frame::interpreter_frame_tos_at(jint offset) const {

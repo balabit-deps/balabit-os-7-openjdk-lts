@@ -26,6 +26,7 @@
 #include "compiler/compileLog.hpp"
 #include "ci/bcEscapeAnalyzer.hpp"
 #include "compiler/oopMap.hpp"
+#include "interpreter/interpreter.hpp"
 #include "opto/callGenerator.hpp"
 #include "opto/callnode.hpp"
 #include "opto/castnode.hpp"
@@ -758,6 +759,7 @@ bool CallNode::may_modify(const TypeOopPtr *t_oop, PhaseTransform *phase) {
         }
       }
     }
+    guarantee(dest != NULL, "Call had only one ptr in, broken IR!");
     if (!dest->is_top() && may_modify_arraycopy_helper(phase->type(dest)->is_oopptr(), t_oop, phase)) {
       return true;
     }
@@ -1148,6 +1150,11 @@ Node* SafePointNode::Identity(PhaseGVN* phase) {
       assert( n0->is_Call(), "expect a call here" );
     }
     if( n0->is_Call() && n0->as_Call()->guaranteed_safepoint() ) {
+      // Don't remove a safepoint belonging to an OuterStripMinedLoopEndNode.
+      // If the loop dies, they will be removed together.
+      if (has_out_with(Op_OuterStripMinedLoopEnd)) {
+        return this;
+      }
       // Useless Safepoint, so remove it
       return in(TypeFunc::Control);
     }
@@ -1441,8 +1448,10 @@ Node *AllocateArrayNode::make_ideal_length(const TypeOopPtr* oop_type, PhaseTran
       if (!allow_new_nodes) return NULL;
       // Create a cast which is control dependent on the initialization to
       // propagate the fact that the array length must be positive.
+      InitializeNode* init = initialization();
+      assert(init != NULL, "initialization not found");
       length = new CastIINode(length, narrow_length_type);
-      length->set_req(0, initialization()->proj_out_or_null(0));
+      length->set_req(0, init->proj_out_or_null(0));
     }
   }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,10 +33,12 @@
 #include "ci/ciArrayKlass.hpp"
 #include "ci/ciInstance.hpp"
 #include "gc/shared/barrierSet.hpp"
-#include "gc/shared/cardTableModRefBS.hpp"
+#include "gc/shared/cardTableBarrierSet.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "nativeInst_x86.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "runtime/frame.inline.hpp"
+#include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "vmreg_x86.inline.hpp"
 
@@ -64,7 +66,6 @@ static jlong *float_signmask_pool  = double_quadword(&fp_signmask_pool[1*2],    
 static jlong *double_signmask_pool = double_quadword(&fp_signmask_pool[2*2],         CONST64(0x7FFFFFFFFFFFFFFF),         CONST64(0x7FFFFFFFFFFFFFFF));
 static jlong *float_signflip_pool  = double_quadword(&fp_signmask_pool[3*2], (jlong)UCONST64(0x8000000080000000), (jlong)UCONST64(0x8000000080000000));
 static jlong *double_signflip_pool = double_quadword(&fp_signmask_pool[4*2], (jlong)UCONST64(0x8000000000000000), (jlong)UCONST64(0x8000000000000000));
-
 
 
 NEEDS_CLEANUP // remove this definitions ?
@@ -529,12 +530,16 @@ void LIR_Assembler::return_op(LIR_Opr result) {
 
   if (SafepointMechanism::uses_thread_local_poll()) {
 #ifdef _LP64
-    __ movptr(rscratch1, Address(r15_thread, Thread::polling_page_offset()));
-    __ relocate(relocInfo::poll_return_type);
-    __ testl(rax, Address(rscratch1, 0));
+    const Register poll_addr = rscratch1;
+    __ movptr(poll_addr, Address(r15_thread, Thread::polling_page_offset()));
 #else
-    ShouldNotReachHere();
+    const Register poll_addr = rbx;
+    assert(FrameMap::is_caller_save_register(poll_addr), "will overwrite");
+    __ get_thread(poll_addr);
+    __ movptr(poll_addr, Address(poll_addr, Thread::polling_page_offset()));
 #endif
+    __ relocate(relocInfo::poll_return_type);
+    __ testl(rax, Address(poll_addr, 0));
   } else {
     AddressLiteral polling_page(os::get_polling_page(), relocInfo::poll_return_type);
 
@@ -555,16 +560,20 @@ int LIR_Assembler::safepoint_poll(LIR_Opr tmp, CodeEmitInfo* info) {
   int offset = __ offset();
   if (SafepointMechanism::uses_thread_local_poll()) {
 #ifdef _LP64
-    __ movptr(rscratch1, Address(r15_thread, Thread::polling_page_offset()));
+    const Register poll_addr = rscratch1;
+    __ movptr(poll_addr, Address(r15_thread, Thread::polling_page_offset()));
+#else
+    assert(tmp->is_cpu_register(), "needed");
+    const Register poll_addr = tmp->as_register();
+    __ get_thread(poll_addr);
+    __ movptr(poll_addr, Address(poll_addr, in_bytes(Thread::polling_page_offset())));
+#endif
     add_debug_info_for_branch(info);
     __ relocate(relocInfo::poll_type);
     address pre_pc = __ pc();
-    __ testl(rax, Address(rscratch1, 0));
+    __ testl(rax, Address(poll_addr, 0));
     address post_pc = __ pc();
-    guarantee(pointer_delta(post_pc, pre_pc, 1) == 3, "must be exact length");
-#else
-    ShouldNotReachHere();
-#endif
+    guarantee(pointer_delta(post_pc, pre_pc, 1) == 2 LP64_ONLY(+1), "must be exact length");
   } else {
     AddressLiteral polling_page(os::get_polling_page(), relocInfo::poll_type);
     if (Assembler::is_polling_page_far()) {
@@ -640,7 +649,7 @@ void LIR_Assembler::const2reg(LIR_Opr src, LIR_Opr dest, LIR_PatchCode patch_cod
 
     case T_FLOAT: {
       if (dest->is_single_xmm()) {
-        if (c->is_zero_float()) {
+        if (LP64_ONLY(UseAVX < 2 &&) c->is_zero_float()) {
           __ xorps(dest->as_xmm_float_reg(), dest->as_xmm_float_reg());
         } else {
           __ movflt(dest->as_xmm_float_reg(),
@@ -662,7 +671,7 @@ void LIR_Assembler::const2reg(LIR_Opr src, LIR_Opr dest, LIR_PatchCode patch_cod
 
     case T_DOUBLE: {
       if (dest->is_double_xmm()) {
-        if (c->is_zero_double()) {
+        if (LP64_ONLY(UseAVX < 2 &&) c->is_zero_double()) {
           __ xorpd(dest->as_xmm_double_reg(), dest->as_xmm_double_reg());
         } else {
           __ movdbl(dest->as_xmm_double_reg(),
@@ -1336,7 +1345,11 @@ void LIR_Assembler::mem2reg(LIR_Opr src, LIR_Opr dest, BasicType type, LIR_Patch
       __ decode_heap_oop(dest->as_register());
     }
 #endif
-    __ verify_oop(dest->as_register());
+
+    // Load barrier has not yet been applied, so ZGC can't verify the oop here
+    if (!UseZGC) {
+      __ verify_oop(dest->as_register());
+    }
   } else if (type == T_ADDRESS && addr->disp() == oopDesc::klass_offset_in_bytes()) {
 #ifdef _LP64
     if (UseCompressedClassPointers) {
@@ -1543,10 +1556,10 @@ void LIR_Assembler::emit_opConvert(LIR_OpConvert* op) {
 
 void LIR_Assembler::emit_alloc_obj(LIR_OpAllocObj* op) {
   if (op->init_check()) {
+    add_debug_info_for_null_check_here(op->stub()->info());
     __ cmpb(Address(op->klass()->as_register(),
                     InstanceKlass::init_state_offset()),
                     InstanceKlass::fully_initialized);
-    add_debug_info_for_null_check_here(op->stub()->info());
     __ jcc(Assembler::notEqual, *op->stub()->entry());
   }
   __ allocate_object(op->obj()->as_register(),
@@ -1668,9 +1681,9 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
     // Object is null; update MDO and exit
     Register mdo  = klass_RInfo;
     __ mov_metadata(mdo, md->constant_encoding());
-    Address data_addr(mdo, md->byte_offset_of_slot(data, DataLayout::header_offset()));
-    int header_bits = DataLayout::flag_mask_to_header_mask(BitData::null_seen_byte_constant());
-    __ orl(data_addr, header_bits);
+    Address data_addr(mdo, md->byte_offset_of_slot(data, DataLayout::flags_offset()));
+    int header_bits = BitData::null_seen_byte_constant();
+    __ orb(data_addr, header_bits);
     __ jmp(*obj_is_null);
     __ bind(not_null);
   } else {
@@ -1814,9 +1827,9 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
       // Object is null; update MDO and exit
       Register mdo  = klass_RInfo;
       __ mov_metadata(mdo, md->constant_encoding());
-      Address data_addr(mdo, md->byte_offset_of_slot(data, DataLayout::header_offset()));
-      int header_bits = DataLayout::flag_mask_to_header_mask(BitData::null_seen_byte_constant());
-      __ orl(data_addr, header_bits);
+      Address data_addr(mdo, md->byte_offset_of_slot(data, DataLayout::flags_offset()));
+      int header_bits = BitData::null_seen_byte_constant();
+      __ orb(data_addr, header_bits);
       __ jmp(done);
       __ bind(not_null);
     } else {
@@ -2383,16 +2396,25 @@ void LIR_Assembler::arith_fpu_implementation(LIR_Code code, int left_index, int 
 }
 
 
-void LIR_Assembler::intrinsic_op(LIR_Code code, LIR_Opr value, LIR_Opr unused, LIR_Opr dest, LIR_Op* op) {
+void LIR_Assembler::intrinsic_op(LIR_Code code, LIR_Opr value, LIR_Opr tmp, LIR_Opr dest, LIR_Op* op) {
   if (value->is_double_xmm()) {
     switch(code) {
       case lir_abs :
         {
-          if (dest->as_xmm_double_reg() != value->as_xmm_double_reg()) {
-            __ movdbl(dest->as_xmm_double_reg(), value->as_xmm_double_reg());
+#ifdef _LP64
+          if (UseAVX > 2 && !VM_Version::supports_avx512vl()) {
+            assert(tmp->is_valid(), "need temporary");
+            __ vpandn(dest->as_xmm_double_reg(), tmp->as_xmm_double_reg(), value->as_xmm_double_reg(), 2);
+          } else
+#endif
+          {
+            if (dest->as_xmm_double_reg() != value->as_xmm_double_reg()) {
+              __ movdbl(dest->as_xmm_double_reg(), value->as_xmm_double_reg());
+            }
+            assert(!tmp->is_valid(), "do not need temporary");
+            __ andpd(dest->as_xmm_double_reg(),
+                     ExternalAddress((address)double_signmask_pool));
           }
-          __ andpd(dest->as_xmm_double_reg(),
-                    ExternalAddress((address)double_signmask_pool));
         }
         break;
 
@@ -2580,7 +2602,9 @@ void LIR_Assembler::arithmetic_idiv(LIR_Code code, LIR_Opr left, LIR_Opr right, 
     move_regs(lreg, rax);
 
     int idivl_offset = __ corrected_idivl(rreg);
-    add_debug_info_for_div0(idivl_offset, info);
+    if (ImplicitDiv0Checks) {
+      add_debug_info_for_div0(idivl_offset, info);
+    }
     if (code == lir_irem) {
       move_regs(rdx, dreg); // result is in rdx
     } else {
@@ -3047,9 +3071,8 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     store_parameter(src, 4);
     NOT_LP64(assert(src == rcx && src_pos == rdx, "mismatch in calling convention");)
 
-    address C_entry = CAST_FROM_FN_PTR(address, Runtime1::arraycopy);
-
     address copyfunc_addr = StubRoutines::generic_arraycopy();
+    assert(copyfunc_addr != NULL, "generic arraycopy stub required");
 
     // pass arguments: may push as this is not a safepoint; SP must be fix at each safepoint
 #ifdef _LP64
@@ -3067,29 +3090,21 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     // Allocate abi space for args but be sure to keep stack aligned
     __ subptr(rsp, 6*wordSize);
     store_parameter(j_rarg4, 4);
-    if (copyfunc_addr == NULL) { // Use C version if stub was not generated
-      __ call(RuntimeAddress(C_entry));
-    } else {
 #ifndef PRODUCT
-      if (PrintC1Statistics) {
-        __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
-      }
-#endif
-      __ call(RuntimeAddress(copyfunc_addr));
+    if (PrintC1Statistics) {
+      __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
     }
+#endif
+    __ call(RuntimeAddress(copyfunc_addr));
     __ addptr(rsp, 6*wordSize);
 #else
     __ mov(c_rarg4, j_rarg4);
-    if (copyfunc_addr == NULL) { // Use C version if stub was not generated
-      __ call(RuntimeAddress(C_entry));
-    } else {
 #ifndef PRODUCT
-      if (PrintC1Statistics) {
-        __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
-      }
-#endif
-      __ call(RuntimeAddress(copyfunc_addr));
+    if (PrintC1Statistics) {
+      __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
     }
+#endif
+    __ call(RuntimeAddress(copyfunc_addr));
 #endif // _WIN64
 #else
     __ push(length);
@@ -3098,26 +3113,20 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ push(src_pos);
     __ push(src);
 
-    if (copyfunc_addr == NULL) { // Use C version if stub was not generated
-      __ call_VM_leaf(C_entry, 5); // removes pushed parameter from the stack
-    } else {
 #ifndef PRODUCT
-      if (PrintC1Statistics) {
-        __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
-      }
-#endif
-      __ call_VM_leaf(copyfunc_addr, 5); // removes pushed parameter from the stack
+    if (PrintC1Statistics) {
+      __ incrementl(ExternalAddress((address)&Runtime1::_generic_arraycopystub_cnt));
     }
+#endif
+    __ call_VM_leaf(copyfunc_addr, 5); // removes pushed parameter from the stack
 
 #endif // _LP64
 
     __ cmpl(rax, 0);
     __ jcc(Assembler::equal, *stub->continuation());
 
-    if (copyfunc_addr != NULL) {
-      __ mov(tmp, rax);
-      __ xorl(tmp, -1);
-    }
+    __ mov(tmp, rax);
+    __ xorl(tmp, -1);
 
     // Reload values from the stack so they are where the stub
     // expects them.
@@ -3127,11 +3136,9 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ movptr   (src_pos, Address(rsp, 3*BytesPerWord));
     __ movptr   (src,     Address(rsp, 4*BytesPerWord));
 
-    if (copyfunc_addr != NULL) {
-      __ subl(length, tmp);
-      __ addl(src_pos, tmp);
-      __ addl(dst_pos, tmp);
-    }
+    __ subl(length, tmp);
+    __ addl(src_pos, tmp);
+    __ addl(dst_pos, tmp);
     __ jmp(*stub->entry());
 
     __ bind(*stub->continuation());
@@ -3502,7 +3509,7 @@ void LIR_Assembler::emit_profile_call(LIR_OpProfileCall* op) {
   ciMethodData* md = method->method_data_or_null();
   assert(md != NULL, "Sanity");
   ciProfileData* data = md->bci_to_data(bci);
-  assert(data->is_CounterData(), "need CounterData for calls");
+  assert(data != NULL && data->is_CounterData(), "need CounterData for calls");
   assert(op->mdo()->is_single_cpu(),  "mdo must be allocated");
   Register mdo  = op->mdo()->as_register();
   __ mov_metadata(mdo, md->constant_encoding());
@@ -3734,7 +3741,7 @@ void LIR_Assembler::align_backward_branch_target() {
 }
 
 
-void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest) {
+void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest, LIR_Opr tmp) {
   if (left->is_single_cpu()) {
     __ negl(left->as_register());
     move_regs(left->as_register(), dest->as_register());
@@ -3759,24 +3766,36 @@ void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest) {
 #endif // _LP64
 
   } else if (dest->is_single_xmm()) {
-    if (left->as_xmm_float_reg() != dest->as_xmm_float_reg()) {
-      __ movflt(dest->as_xmm_float_reg(), left->as_xmm_float_reg());
+#ifdef _LP64
+    if (UseAVX > 2 && !VM_Version::supports_avx512vl()) {
+      assert(tmp->is_valid(), "need temporary");
+      assert_different_registers(left->as_xmm_float_reg(), tmp->as_xmm_float_reg());
+      __ vpxor(dest->as_xmm_float_reg(), tmp->as_xmm_float_reg(), left->as_xmm_float_reg(), 2);
     }
-    if (UseAVX > 0) {
-      __ vnegatess(dest->as_xmm_float_reg(), dest->as_xmm_float_reg(),
-                   ExternalAddress((address)float_signflip_pool));
-    } else {
+    else
+#endif
+    {
+      assert(!tmp->is_valid(), "do not need temporary");
+      if (left->as_xmm_float_reg() != dest->as_xmm_float_reg()) {
+        __ movflt(dest->as_xmm_float_reg(), left->as_xmm_float_reg());
+      }
       __ xorps(dest->as_xmm_float_reg(),
                ExternalAddress((address)float_signflip_pool));
     }
   } else if (dest->is_double_xmm()) {
-    if (left->as_xmm_double_reg() != dest->as_xmm_double_reg()) {
-      __ movdbl(dest->as_xmm_double_reg(), left->as_xmm_double_reg());
+#ifdef _LP64
+    if (UseAVX > 2 && !VM_Version::supports_avx512vl()) {
+      assert(tmp->is_valid(), "need temporary");
+      assert_different_registers(left->as_xmm_double_reg(), tmp->as_xmm_double_reg());
+      __ vpxor(dest->as_xmm_double_reg(), tmp->as_xmm_double_reg(), left->as_xmm_double_reg(), 2);
     }
-    if (UseAVX > 0) {
-      __ vnegatesd(dest->as_xmm_double_reg(), dest->as_xmm_double_reg(),
-                   ExternalAddress((address)double_signflip_pool));
-    } else {
+    else
+#endif
+    {
+      assert(!tmp->is_valid(), "do not need temporary");
+      if (left->as_xmm_double_reg() != dest->as_xmm_double_reg()) {
+        __ movdbl(dest->as_xmm_double_reg(), left->as_xmm_double_reg());
+      }
       __ xorpd(dest->as_xmm_double_reg(),
                ExternalAddress((address)double_signflip_pool));
     }
@@ -3791,11 +3810,22 @@ void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest) {
 }
 
 
-void LIR_Assembler::leal(LIR_Opr addr, LIR_Opr dest) {
-  assert(addr->is_address() && dest->is_register(), "check");
-  Register reg;
-  reg = dest->as_pointer_register();
-  __ lea(reg, as_Address(addr->as_address_ptr()));
+void LIR_Assembler::leal(LIR_Opr src, LIR_Opr dest, LIR_PatchCode patch_code, CodeEmitInfo* info) {
+  assert(src->is_address(), "must be an address");
+  assert(dest->is_register(), "must be a register");
+
+  PatchingStub* patch = NULL;
+  if (patch_code != lir_patch_none) {
+    patch = new PatchingStub(_masm, PatchingStub::access_field_id);
+  }
+
+  Register reg = dest->as_pointer_register();
+  LIR_Address* addr = src->as_address_ptr();
+  __ lea(reg, as_Address(addr));
+
+  if (patch != NULL) {
+    patching_epilog(patch, patch_code, addr->base()->as_register(), info);
+  }
 }
 
 
