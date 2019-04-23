@@ -1,0 +1,12 @@
+#
+# For now it is using the unmodified upstream
+# tarball while previously the use of get-orig
+# from the debian/rules file would remove a
+# few files from it - this can be replicated
+# by either providing a repack script or by
+# adding the exclusions directly to 
+# debian/copyright.
+#
+version=4
+opts=pgpmode=auto https://openjdk-sources.osci.io/openjdk11/ openjdk@ANY_VERSION@@ARCHIVE_EXT@
+

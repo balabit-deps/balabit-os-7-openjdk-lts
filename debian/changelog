@@ -1,20 +1,102 @@
-openjdk-lts (11.0.2+9-3ubuntu1~18.04.3) bionic-security; urgency=medium
+openjdk-lts (11.0.3+7-1ubuntu2~18.04.1) bionic-security; urgency=medium
 
-  * Backport from Disco. LP: #1814133.
-  * Revert to GTK2 as default as GTK3 still has padding and component issues,
-    apply upstream changeset to fix a few GTK3 components: LP: #1770278.
-    - debian/patches/jdk-improve-gtk3-compatibility.patch: upstream fix for
-      JDK-8218469, JDK-8218470, JDK-8218472, and JDK-8203627.
-    - debian/patches/keep-gtk2-as-default.patch: revert upstream so GTK2 is
-      loaded before GTK3 when available.
-    - debian/rules, debian/control: remove libgtk-3-dev from build depends
-      as it is not required for building; set jre to depend on libgtk2.0-0
-      and alternatively to libgtk-3-0.
-  * Adds breaks clause to prevent openjdk-11-jre-headless from being updated
-    when jetty9, netbeans, tomcat8, or visualvm are being hold back in
-    unattended-upgrades due to local conffiles changes.
+  * Backport from Eoan.
+  * debian/rules: remove vendor flags from configure as they are breaking
+    Libre Office.
+  * debian/tests/jtreg-autopkgtest.sh: fix jdk default path to point to
+    openjdk-11.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 26 Mar 2019 20:57:06 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 23 Apr 2019 18:34:35 +0000
+
+openjdk-lts (11.0.3+7-1ubuntu2) eoan; urgency=medium
+
+  * Security fixes:
+    - S8211936, CVE-2019-2602: Better String parsing
+    - S8218453, CVE-2019-2684: More dynamic RMI interactions
+    - S8214809: CDS storage improvements
+  * debian/control, debian/control.in: add breaks clause to prevent
+    openjdk-11-jre-headless from being updated when jetty9, netbeans,
+    tomcat8, or visualvm are being hold back in unattended-upgrades
+    due to local conffiles changes.
+  * Add support for automatic updates:
+    - debian/watch: upstream has started releasing tarballs and signatures at
+      https://openjdk-sources.osci.io/openjdk11/ which allows us to track new
+      releases and check signatures by using uscan. For now it is using the
+      unmodified upstream tarball while previously the use of get-orig from
+      the debian/rules file would remove a few files from it - this can be
+      replicated by either providing a repack script or by adding the
+      exclusions directly to debian/copyright.
+    - debian/upstream/signing-key.asc: public signing key used by upstream
+      to sign their tarball releases.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 23 Apr 2019 02:17:15 +0000
+
+openjdk-lts (11.0.3+7-1ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.3+7-1:
+    - OpenJDK 11.0.3+7 build.
+    - Support using the Java ATK wrapper (Samuel Thibault). Closes: #900912.
+      - patches/jaw-classpath.diff: Fix finding the Java ATK wrapper.
+      - patches/jaw-optional.diff: Make failing to load the Java ATK wrapper
+        non-fatal.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 17 Apr 2019 05:00:11 +0200
+
+openjdk-lts (11.0.3+5-1ubuntu2) disco; urgency=medium
+
+  * Fix configuring with the vendor flags.
+
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 02 Apr 2019 16:42:19 +0200
+
+openjdk-lts (11.0.3+5-1ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.3+5-1:
+    - OpenJDK 11.0.3+5 build.
+    - Annotate the bootstrap dependency with :native.
+
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 02 Apr 2019 14:09:44 +0200
+
+openjdk-lts (11.0.3+4-2ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.3+4-2:
+    [ Matthias Klose ]
+    - Configure with vendor flags.
+    - Work around the missing gcc-for-host b-d for cross builds.
+    - Backport fix for 8221083, wrong oop compare in C1-generated code (PPC).
+
+    [ Tiago Stürmer Daitx ]
+    - Revert to GTK2 as default since GTK3 still has padding and
+      component issues, apply upstream changeset to fix a few GTK3
+      components: LP: #1770278.
+      - debian/patches/jdk-improve-gtk3-compatibility.patch: upstream
+        fix for JDK-8218469, JDK-8218470, JDK-8218472, and JDK-8203627.
+      - debian/patches/keep-gtk2-as-default.patch: revert upstream so
+        GTK2 is loaded before GTK3 when available.
+      - debian/rules, debian/control: Set jre to depend on libgtk2.0-0
+        and alternatively to libgtk-3-0.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 28 Mar 2019 10:58:50 +0100
+
+openjdk-lts (11.0.3+4-1ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.3+4-1:
+    - OpenJDK 11.0.3+4 build.
+    - Fix the wrong assumption in the autopkg tests that the OpenJDK is
+      the same as the default JDK.
+    - Don't prune the build trees before running the tests.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 21 Mar 2019 15:07:34 +0100
+
+openjdk-lts (11.0.3+1-1ubuntu1) disco; urgency=medium
+
+  * Sync packages with 11.0.3+1-1:
+    - OpenJDK 11.0.3+1 build.
+    - Attribute test dependencies with <!nocheck>.
+    - Add support for DCEVM on am64 and i386. Closes: #921419.
+    - Check for nodoc instead of nodocs in DEB_BUILD_OPTIONS.
+      Addresses: #922761.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 27 Feb 2019 15:53:42 +0100
 
 openjdk-lts (11.0.2+9-3ubuntu1) disco; urgency=medium
 

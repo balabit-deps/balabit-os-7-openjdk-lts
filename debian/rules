@@ -143,7 +143,7 @@ ifneq (,$(filter $(DEB_HOST_ARCH), alpha))
   with_check = disabled running check on $(DEB_HOST_ARCH)
 endif
 
-with_docs = $(if $(findstring nodocs, $(DEB_BUILD_OPTIONS)),,yes)
+with_docs = $(if $(findstring nodoc, $(DEB_BUILD_OPTIONS)),,yes)
 
 with_wqy_zenhai = $(if $(filter $(distrel),lenny),,yes)
 
@@ -276,6 +276,12 @@ else ifneq (,$(filter $(distrel),artful bionic))
 else
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-8
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-8
+endif
+
+# until we are able to b-d on gcc-for-host ...
+ifneq ($(DEB_BUILD_GNU_TYPE),$(DEB_HOST_GNU_TYPE))
+  export CC = $(DEB_HOST_GNU_TYPE)-gcc
+  export CXX = $(DEB_HOST_GNU_TYPE)-g++
 endif
 
 with_pulse = yes
@@ -474,9 +480,9 @@ jre_hl_tools	:= $(filter-out $(jre_tools), $(all_jre_tools))
 bd_autotools = autoconf, automake, autotools-dev,
 
 ifneq (,$(filter $(distrel),squeeze wheezy jessie precise trusty xenial))
-  bd_bootstrap = openjdk-10-jdk-headless | openjdk-11-jdk-headless,
+    bd_bootstrap = openjdk-10-jdk-headless:native | openjdk-11-jdk-headless:native,
   else
-  bd_bootstrap = openjdk-11-jdk-headless | openjdk-10-jdk-headless,
+    bd_bootstrap = openjdk-11-jdk-headless:native | openjdk-10-jdk-headless:native,
 endif
 ifeq (,$(filter $(distrel),squeeze wheezy jessie precise trusty xenial))
   bd_cross += \
@@ -501,11 +507,11 @@ else ifneq (,$(filter $(distrel),utopic vivid jessie))
 else ifneq (,$(filter $(distrel),wily xenial))
   bd_gcc = g++-5 [$(hotspot_archs)], g++-4.9 [$(strip $(foreach a,$(hotspot_archs), !$(a)))], g++-4.9 [arm64],
 else ifneq (,$(filter $(distrel),stretch))
-  bd_gcc = g++-6,
+  bd_gcc = g++-6 <!cross>,
 else ifneq (,$(filter $(distrel),artful bionic))
-  bd_gcc = g++-7,
+  bd_gcc = g++-7 <!cross>,
 else
-  bd_gcc = g++-8,
+  bd_gcc = g++-8 <!cross>,
 endif
 bd_syslibs = zlib1g-dev, libattr1-dev,
 ifneq (,$(filter $(distrel),squeeze lucid))
@@ -698,7 +704,10 @@ debian/control: debian/control.in debian/rules
 	fi
 
 debian/tests/%.sh: debian/tests/%.in debian/rules
-	sed -e 's/@jtreg_archs@/$(jtreg_archs)/g' $< > $@;
+	sed \
+		-e 's,@JDK_TO_TEST@,/$(basedir),g' \
+		-e 's/@jtreg_archs@/$(jtreg_archs)/g' \
+		$< > $@;
 	chmod +x $@
 
 gen-autopkgtests: debian/tests/jtreg-autopkgtest.sh
@@ -901,11 +910,6 @@ stamps/zero-build: stamps/zero-configure
 		$(builddir)/$(sdkimg)/lib/zero
 	touch $@
 
-stamps/prune-build-dir:
-	-find $(builddir) -mindepth 2 ! -path '$(builddir)/$(sdkimg)/*' -delete
-	rm -rf  $(zbuilddir)
-	touch $@
-
 stamps/build-docs: stamps/build
 	@echo '========== $@ =========='
 	mkdir -p $(builddir)/images/docs
@@ -924,7 +928,7 @@ stamps/jtreg-check-zero: stamps/build
 		TEST_SUITES='hotspot langtools jaxp'
 	touch $@
 
-jtreg-run-check: stamps/prune-build-dir
+jtreg-run-check:
 	mkdir -p jtreg-test-output
 ifneq (,$(filter $(VMNAME), $(with_jtreg_check)))
 	if [ ! -f $(builddir)/$(sdkimg)/conf/security/java.security.install ]; then \
@@ -979,26 +983,26 @@ TESTS_TO_RUN = $(addprefix check-,$(TEST_SUITES))
 
 check-hotspot: stamps/build
 	mkdir -p jtreg-test-output/hotspot
-	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_DIR=$(builddir)/$(sdkimg) \
+	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_TO_TEST=$(builddir)/$(sdkimg) \
 	AUTOPKGTEST_TMP=/tmp/ AUTOPKGTEST_ARTIFACTS=jtreg-test-output/hotspot/ \
 	  $(TIME) debian/tests/hotspot | tee jtreg-test-output/$@.log
 
 
 check-langtools: stamps/build
 	mkdir -p jtreg-test-output/langtools
-	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_DIR=$(builddir)/$(sdkimg) \
+	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_TO_TEST=$(builddir)/$(sdkimg) \
 	AUTOPKGTEST_TMP=/tmp/ AUTOPKGTEST_ARTIFACTS=jtreg-test-output/langtools/ \
 	  $(TIME) debian/tests/langtools | tee jtreg-test-output/$@.log
 
 check-jaxp: stamps/build
 	mkdir -p jtreg-test-output/jaxp
-	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_DIR=$(builddir)/$(sdkimg) \
+	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_TO_TEST=$(builddir)/$(sdkimg) \
 	AUTOPKGTEST_TMP=/tmp/ AUTOPKGTEST_ARTIFACTS=jtreg-test-output/langtools/ \
 	  $(TIME) debian/tests/jaxp | tee jtreg-test-output/$@.log
 
 check-jdk: stamps/build
 	mkdir -p jtreg-test-output/jdk
-	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_DIR=$(builddir)/$(sdkimg) \
+	JTREG_OPTIONS=$(JTREG_OPTIONS) VMNAME=$(VMNAME) JDK_TO_TEST=$(builddir)/$(sdkimg) \
 	AUTOPKGTEST_TMP=/tmp/ AUTOPKGTEST_ARTIFACTS=jtreg-test-output/jdk/ \
 	  $(TIME) debian/tests/jdk | tee jtreg-test-output/$@.log
 
@@ -1159,6 +1163,9 @@ ifneq (,$(filter $(DEB_HOST_ARCH), $(hotspot_archs)))
 	printf -- '-zero KNOWN\n' >> $(d)/$(etcdir)/jvm.cfg
 else
 	printf -- '-zero ALIASED_TO -server\n' >> $(d)/$(etcdir)/jvm.cfg
+endif
+ifneq (,$(filter $(DEB_HOST_ARCH), amd64 i386))
+	printf -- '-dcevm KNOWN\n' >> $(d)/$(etcdir)/jvm.cfg
 endif
 
 	: # remove files which we do not want to distribute
@@ -1445,23 +1452,26 @@ ifneq (,$(filter $(DEB_HOST_ARCH),amd64 kfreebsd-amd64))
   endif
 endif
 
-ifeq (0,1)
-# FIXME: ext not longer supported
 ifeq ($(with_bridge),atk)
 	: # create links for the atk wrapper
+  ifeq (0,1)
+  # FIXME: ext no longer supported
 	echo "usr/share/java/java-atk-wrapper.jar $(basedir)/lib/ext/java-atk-wrapper.jar" \
 	    >> $(d_jre).links
-	echo "usr/lib$(multiarch_dir)/jni/libatk-wrapper.so $(basedir)/lib/ext/libatk-wrapper.so" \
+  endif
+	echo "usr/lib$(multiarch_dir)/jni/libatk-wrapper.so $(basedir)/lib/libatk-wrapper.so" \
 	    >> $(d_jre).links
 else ifeq ($(with_bridge),yes)
+ ifeq (0,1)
+# FIXME: ext no longer supported
 	: # create links for the gnome accessibility bridge
 	echo "usr/share/java/gnome-java-bridge.jar $(basedir)/lib/ext/gnome-java-bridge.jar" \
 	    >> $(d_jre).links
   ifeq ($(with_jni_bridge),yes)
-	  echo "usr/lib$(multiarch_dir)/jni/libjava-access-bridge-jni.so $(basedir)/lib/ext/libjava-access-bridge-jni.so" \
+	  echo "usr/lib$(multiarch_dir)/jni/libjava-access-bridge-jni.so $(basedir)/lib/libjava-access-bridge-jni.so" \
 	    >> $(d_jre).links
   endif
-endif
+ endif
 endif
 
 	: # create links for the config/lib files
@@ -1530,7 +1540,7 @@ endif
 	  install -D -m644 $$FILE debian/$$PKG/usr/share/lintian/overrides/$$PKG; \
 	done
 
-nodocs = $(if $(findstring nodocs, $(DEB_BUILD_OPTIONS)),-N$(p_doc))
+nodocs = $(if $(findstring nodoc, $(DEB_BUILD_OPTIONS)),-N$(p_doc))
 nojrez = $(if $(filter zero, $(alternate_vms)),,-N$(p_jrez))
 
 # Build architecture independant packages
@@ -1652,7 +1662,7 @@ endif
 
 is_release		= yes
 hg_project		= jdk11u
-hg_tag			= jdk-11.0.2+9
+hg_tag			= jdk-11.0.3+7
 package_version		= $(subst jdk-,,$(hg_tag))
 ifneq ($(is_release),yes)
   package_version	:= $(subst +,~,$(package_version))
@@ -1663,6 +1673,7 @@ topdir = $(basename)-$(package_version)
 get-orig:
 	mkdir $(origdir)
 	wget -O $(origdir)/jdk.tar.bz2 $(hg_url)/archive/$(hg_tag).tar.bz2
+#	cp -p ~/jdk.tar.bz2 $(origdir)/jdk.tar.bz2
 
 	set -ex; \
 	repo=jdk; \
