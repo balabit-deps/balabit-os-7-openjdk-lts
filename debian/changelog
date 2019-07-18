@@ -1,40 +1,211 @@
-openjdk-lts (11.0.3+7-1ubuntu2~18.04.1) bionic-security; urgency=medium
+openjdk-lts (11.0.4+11-1ubuntu2~18.04.3) bionic-security; urgency=medium
 
   * Backport from Eoan.
-  * debian/rules: remove vendor flags from configure as they are breaking
-    Libre Office.
-  * debian/tests/jtreg-autopkgtest.sh: fix jdk default path to point to
-    openjdk-11.
+  * Properly generate 'Breaks:' in debian/rules for Bionic (fix typo).
+  * Remove libgtk-3-dev from and add libxrandr-dev to build dependencies.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 23 Apr 2019 18:34:35 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 18 Jul 2019 18:21:46 +0000
 
-openjdk-lts (11.0.3+7-1ubuntu2) eoan; urgency=medium
+openjdk-lts (11.0.4+11-1ubuntu2) eoan; urgency=medium
 
-  * Security fixes:
-    - S8211936, CVE-2019-2602: Better String parsing
-    - S8218453, CVE-2019-2684: More dynamic RMI interactions
-    - S8214809: CDS storage improvements
-  * debian/control, debian/control.in: add breaks clause to prevent
-    openjdk-11-jre-headless from being updated when jetty9, netbeans,
-    tomcat8, or visualvm are being hold back in unattended-upgrades
-    due to local conffiles changes.
-  * Add support for automatic updates:
-    - debian/watch: upstream has started releasing tarballs and signatures at
-      https://openjdk-sources.osci.io/openjdk11/ which allows us to track new
-      releases and check signatures by using uscan. For now it is using the
-      unmodified upstream tarball while previously the use of get-orig from
-      the debian/rules file would remove a few files from it - this can be
-      replicated by either providing a repack script or by adding the
-      exclusions directly to debian/copyright.
-    - debian/upstream/signing-key.asc: public signing key used by upstream
-      to sign their tarball releases.
+  * Improve and fix build tests and autopkgtests:
+    - Update debian/tests/hotspot,jdk,langtools to ignore
+      jtreg-autopkgtest.sh return code.
+    - Create debian/tests/jtdiff-autopkgtest.in as it depends
+      on debian/rules variables.
+    - debian/tests/jtreg-autopkgtest.sh:
+      + Enable retry of failed tests to trim out flaky tests.
+      + Fix unbound variable.
+      + Force JT_JAVA otherwise jtreg will look for
+        /usr/lib/jvm/default-java which might not be installed
+        or be the right JVM to use.
+      + Keep .jtr files from failed tests only.
+    - debian/tests/jtdiff-autopkgtest.sh:
+      + Fail only if an actual regression is detected.
+      + Force JT_JAVA otherwise jtreg will look for
+        /usr/lib/jvm/default-java which might not be installed
+        or be the right JVM to use.
+      + Add the super-diff comparison from jtdiff.
+    - debian/rules:
+      + Preserve all JTreport directories in the test output
+        directory.
+      + Use JDK_DIR instead of JDK_TO_TEST for autopkgtest
+        generation.
+      + Package all .jtr files from JTwork as jtreg-autopkgtest.sh
+        makes sure it contains only failing tests.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 23 Apr 2019 02:17:15 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 18 Jul 2019 17:53:52 +0000
+
+openjdk-lts (11.0.4+11-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+11-1:
+    - OpenJDK 11.0.4+11 build (release).
+      - S8212328, CVE-2019-2762: Exceptional throw cases.
+      - S8213431, CVE-2019-2766: Improve file protocol handling.
+      - S8213432, CVE-2019-2769: Better copies of CopiesList.
+      - S8216381, CVE-2019-2786: More limited privilege usage.
+      - S8217563: Improve realm maintenance.
+      - S8218863: Better endpoint checks.
+      - S8218873: Improve JSSE endpoint checking.
+      - S8218876, CVE-2019-7317: Improve PNG support options.
+      - S8219775: Certificate validation improvements.
+      - S8220517: Enhanced GIF support.
+      - S8221345, CVE-2019-2818: Better Poly1305 support.
+      - S8221518, CVE-2019-2816: Normalize normalization.
+      - S8222678, CVE-2019-2821: Improve TLS negotiation.
+    - Fix more build issues for Ubuntu precise builds.
+    - Bump standards version.
+
+  [ Tiago Stürmer Daitx ]
+  * Fix unbound variable debian/tests/jtreg-autopkgtest.in.
+  * Regenerate debian/tests/jtreg-autopkgtest.sh to fix wrong path.
+  * Force jtdiff to return success.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 17 Jul 2019 02:37:32 +0200
+
+openjdk-lts (11.0.4+10-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+10-1:
+    - OpenJDK 11.0.4+10 build (early access).
+    - Add riscv64 support for zero (Ed Nevill).
+    - Fix build dependencies for Ubuntu precise builds.
+    - Fix dependency generation on the libjpeg runtime. Closes: #927965.
+    - Drop dependency on transitional libgl1-mesa-glx package. Closes: #930611.
+
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 02 Jul 2019 15:08:32 +0200
+
+openjdk-lts (11.0.4+9-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+9-1:
+    - OpenJDK 11.0.4+9 build (early access).
+    - Add another break for libequinox-osgi-java (<< 3.9.1). Closes: #931115.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 26 Jun 2019 14:02:42 +0200
+
+openjdk-lts (11.0.4+8-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+8-1:
+    - OpenJDK 11.0.4+8 build (early access).
+    - Apply patch for JDK-8225716.
+  * Remove the icedtea-sound build logic.
+  * Install swing.properties into <java-home>/conf instead of <java-home>/lib.
+
+ -- Matthias Klose <doko@ubuntu.com>  Sat, 22 Jun 2019 18:16:21 +0200
+
+openjdk-lts (11.0.4+6-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+6-1:
+    - OpenJDK 11.0.4+6 build (early access).
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 06 Jun 2019 09:36:22 +0200
+
+openjdk-lts (11.0.4+4-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+4-1:
+    - OpenJDK 11.0.4+4 build (early access).
+    - Configure with --with-version-pre='ea' for upstream tags which are
+      not upstream releases (has to be set manually). Not enabled during
+      the buster freeze.
+    - Allow to skip the bootcycle build (DEB_BUILD_OPTIONS=nobootcycle).
+    - Add a watch file (Paul Wise).
+    - Print some information about the host configuration before starting
+      the build.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 29 May 2019 08:08:09 +0200
+
+openjdk-lts (11.0.4+2-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+2-1:
+    - OpenJDK 11.0.4+2 build.
+    - Fix src.zip symlink. Closes: #928369.
+    - Tighten dependency on ca-certificates-java. Closes: #914860.
+    - Refresh patches.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 15 May 2019 01:12:09 +0200
+
+openjdk-lts (11.0.4+1-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.4+1-1:
+    - OpenJDK 11.0.4+1 build.
+
+ -- Matthias Klose <doko@ubuntu.com>  Mon, 06 May 2019 17:53:46 +0200
+
+openjdk-lts (11.0.3+7-4ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.3+7-4:
+  * Add breaks to the openjdk-11-jre-headless package:
+    - For unattended upgrades: jetty9, netbeans, tomcat8, visualvm.
+    - For eclipse 3.8 removal: eclipse-platform. Closes: #925071.
+    - For configuration with vendor flag: libreoffice-core.
+  * Install jspawnhelper.
+  * Apply updates from jdk11u-dev, and remove locally applied patches:
+    - 8218618: Program fails when using JDK addressed by UNC path and using
+      Security Managerdefault tip.
+    - 8221924: get(null) on single-entry unmodifiable Map returns null
+      instead of throwing NPE.
+    - 8206955: MethodHandleProxies.asInterfaceInstance does not support default
+      methodsdefault tip.
+    - 8221304: Problem list java/awt/FontMetrics/MaxAdvanceIsMax.java.
+    - 8218854: FontMetrics.getMaxAdvance may be less than the maximum
+      FontMetrics.charWidth.
+    - 8214002: Cannot use italic font style if the font has embedded bitmap.
+    - 8222522: Add configure options for Mac Bundle creation.
+    - 8221880: Better customization for Windows RC properties FileDescription
+      and ProductName.
+    - 8222133: Add temporary exceptions for root certs that are due to expire
+      soon.
+    - 8222089: [TESTBUG] sun/security/lib/cacerts/VerifyCACerts.java fails due
+      to cert within 90-day expiry window.
+    - 8170494: JNI exception pending in PlainDatagramSocketImpl.c.
+    - 8217879: hs_err should print more instructions in hex dump.
+    - 8222410: java/nio/file/attribute/BasicFileAttributeView/UnixSocketFile
+      hangs when "nc" does not accept "-U".
+    - 8222397: x86_32 tests with UseSHA1Intrinsics SEGV due to garbled
+      registers.
+    - 8209914: javadoc search sometimes generates bad URIs.
+    - 8218020: Fix version number in mesa.md 3rd party legal file.
+    - 8188133: C2: Static field accesses in clinit can trigger
+      deoptimizations.
+    - 8215472: (zipfs) Cleanups in implementation classes of jdk.zipfs and
+      tests.
+    - 8211266: [TESTBUG] ZipFSTester.java failed intermittently in
+      ZipFSTester.checkRead(): bound must be positive.
+    - 8210899: (zipfs) ZipFileSystem.EntryOutputStreamCRC32 mistakenly set the
+      crc32 value into size field.
+    - 8217647: JFR: recordings on 32-bit systems unreadable.
+    - 8216970: condy causes JVM crash.
+    - 8222032: x86_32 fails with "wrong size of mach node" on AVX-512 machine.
+    - 8221917: serviceability/sa/TestPrintMdo.java fails on 32-bit platforms.
+    - 8220349: The fix done for JDK-8214253 have caused issues in JTree
+      behaviour.
+    - 8221833: Readability check in Symbol::is_valid not performed for some
+      addresses.
+    - 8220441: [PPC64] Clobber memory effect missing for memory barriers in
+      atomics.
+    - 8218991: s390: Add intrinsic for GHASH algorithm.
+    - 8220625: tools/javac/classreader/8171132/BadConstantValue.java failed
+      with "did not see expected error".
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 25 Apr 2019 10:21:12 +0200
+
+openjdk-lts (11.0.3+7-2ubuntu1) disco-proposed; urgency=medium
+
+  * Sync packages with 11.0.3+7-2:
+    - Fix 8210739: Calling JSpinner's setFont with null throws
+      NullPointerException.
+    - Fix 8210483: AssertionError in DeferredAttr at setOverloadKind caused by
+      JDK-8203679.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 18 Apr 2019 05:03:41 +0200
 
 openjdk-lts (11.0.3+7-1ubuntu1) disco; urgency=medium
 
   * Sync packages with 11.0.3+7-1:
     - OpenJDK 11.0.3+7 build.
+      - Security fixes:
+        - S8211936, CVE-2019-2602: Better String parsing.
+        - S8218453, CVE-2019-2684: More dynamic RMI interactions.
+        - S8219066, CVE-2019-2698: Fuzzing TrueType fonts: setCurrGlyphID().
     - Support using the Java ATK wrapper (Samuel Thibault). Closes: #900912.
       - patches/jaw-classpath.diff: Fix finding the Java ATK wrapper.
       - patches/jaw-optional.diff: Make failing to load the Java ATK wrapper
