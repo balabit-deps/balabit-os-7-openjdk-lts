@@ -1,7 +1,7 @@
 Tests: hotspot, jaxp, langtools
-Depends: @, jtreg, testng, gcc
-Restrictions: allow-stderr, skippable
+Depends: @, default-jre-headless, jtreg (>= 4.2-b13-0~), testng, g++
+Restrictions: allow-stderr, skippable, flaky
 
 Tests: jdk
-Depends: @, jtreg, testng, gcc, xfwm4, xvfb, dbus-x11
-Restrictions: allow-stderr, skippable
+Depends: @, default-jre-headless, jtreg (>= 4.2-b13-0~), testng, g++, xfwm4, xvfb, dbus-x11
+Restrictions: allow-stderr, skippable, flaky

@@ -18,7 +18,7 @@ disable-doclint-by-default.diff
 8199220.diff
 machine-flag.diff
 zero-x32.diff
-mips-sigset.diff
+# mips-sigset.diff
 # s390x-zEC12.diff
 hotspot-disable-exec-shield-workaround.diff
 atk-wrapper-security.diff
@@ -39,3 +39,4 @@ keep-gtk2-as-default.patch
 jaw-classpath.diff
 jaw-optional.diff
 riscv64.diff
+8230708.diff

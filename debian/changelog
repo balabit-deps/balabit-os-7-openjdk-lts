@@ -1,40 +1,109 @@
-openjdk-lts (11.0.4+11-1ubuntu2~18.04.3) bionic-security; urgency=medium
+openjdk-lts (11.0.5+10-0ubuntu1.1~18.04) bionic-security; urgency=medium
 
   * Backport from Eoan.
-  * Properly generate 'Breaks:' in debian/rules for Bionic (fix typo).
-  * Remove libgtk-3-dev from and add libxrandr-dev to build dependencies.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 18 Jul 2019 18:21:46 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 16 Oct 2019 22:01:07 +0000
 
-openjdk-lts (11.0.4+11-1ubuntu2) eoan; urgency=medium
+openjdk-lts (11.0.5+10-0ubuntu1.1) eoan-security; urgency=high
 
-  * Improve and fix build tests and autopkgtests:
-    - Update debian/tests/hotspot,jdk,langtools to ignore
-      jtreg-autopkgtest.sh return code.
-    - Create debian/tests/jtdiff-autopkgtest.in as it depends
-      on debian/rules variables.
-    - debian/tests/jtreg-autopkgtest.sh:
-      + Enable retry of failed tests to trim out flaky tests.
-      + Fix unbound variable.
-      + Force JT_JAVA otherwise jtreg will look for
-        /usr/lib/jvm/default-java which might not be installed
-        or be the right JVM to use.
-      + Keep .jtr files from failed tests only.
-    - debian/tests/jtdiff-autopkgtest.sh:
-      + Fail only if an actual regression is detected.
-      + Force JT_JAVA otherwise jtreg will look for
-        /usr/lib/jvm/default-java which might not be installed
-        or be the right JVM to use.
-      + Add the super-diff comparison from jtdiff.
-    - debian/rules:
-      + Preserve all JTreport directories in the test output
-        directory.
-      + Use JDK_DIR instead of JDK_TO_TEST for autopkgtest
-        generation.
-      + Package all .jtr files from JTwork as jtreg-autopkgtest.sh
-        makes sure it contains only failing tests.
+  * Update to 11.0.5-10.
+  * Security fixes:
+    - S8209901: Canonical file handling.
+    - S8213429, CVE-2019-2933: Windows file handling redux.
+    - S8218573, CVE-2019-2945: Better socket support.
+    - S8218877: Help transform transformers.
+    - S8219914: Change the environment variable for Java Access Bridge.
+      logging to have a directory..
+    - S8220186: Improve use of font temporary files.
+    - S8220302, CVE-2019-2949: Better Kerberos ccache handling.
+    - S8221497: Optional Panes in Swing.
+    - S8221858, CVE-2019-2958: Build Better Processes.
+    - S8222684, CVE-2019-2964: Better support for patterns.
+    - S8222690, CVE-2019-2962: Better Glyph Images.
+    - S8223163: Better pattern recognition.
+    - S8223505, CVE-2019-2973: Better pattern compilation.
+    - S8223518, CVE-2019-2975: Unexpected exception in jjs.
+    - S8223886: Add in font table referene.
+    - S8223892, CVE-2019-2978: Improved handling of jar files.
+    - S8224025: Fix for JDK-8220302 is not complete.
+    - S8224062, CVE-2019-2977: Improve String index handling.
+    - S8224532, CVE-2019-2981: Better Path supports.
+    - S8224915, CVE-2019-2983: Better serial attributes.
+    - S8225286, CVE-2019-2987: Better rendering of native glyphs.
+    - S8225292, CVE-2019-2988: Better Graphics2D drawing.
+    - S8225298, CVE-2019-2989: Improve TLS connection support.
+    - S8225597, CVE-2019-2992: Enhance font glyph mapping.
+    - S8226765, CVE-2019-2999: Commentary on Javadoc comments.
+    - S8227601: Better collection of references.
+    - S8228825, CVE-2019-2894: Enhance ECDSA operations.
+  * debian/tests/control: mark all autopkgtests as flaky, Depends on g++
+    instead of gcc.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 18 Jul 2019 17:53:52 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 16 Oct 2019 00:57:17 +0000
+
+openjdk-lts (11.0.5+9-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.5+9-1:
+    - OpenJDK 11.0.5+9 build (early access).
+    - Bump standards version.
+    - Use dh_strip_nondeterminism (Emmanuel Bourg). Closes: #933389.
+    - Fix 8230708, server build on sparc64 (Adrian Glaubitz). Closes: #939565.
+    - Fix FTBFS with DEB_BUILD_PROFILES=nocheck (Helmut Grohne). Closes: #939521.
+    - Add more breaks to the openjdk-11-jre-headless package. Closes: #935624.
+    - Fix debug and src symlinks. Closes: #893134, #910694, #910696.
+
+ -- Matthias Klose <doko@ubuntu.com>  Mon, 07 Oct 2019 11:49:08 +0200
+
+openjdk-lts (11.0.5+6-1ubuntu2) eoan; urgency=medium
+
+  * Don't build zero on armhf, ftbfs at least in eoan.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 05 Sep 2019 05:37:23 +0200
+
+openjdk-lts (11.0.5+6-1ubuntu1) eoan; urgency=medium
+
+  * Sync packages with 11.0.5+6-1:
+    - OpenJDK 11.0.5+6 build (early access).
+
+    [ Matthias Klose ]
+    - Tighten dependency on jtreg.
+    - Build using GCC 9 on recent development releases.
+    - Refresh patches.
+
+    [ Tiago Stürmer Daitx ]
+    - Properly generate Breaks: rules for bionic (fix typo).
+    - Remove libgtk-3-dev from build-deps: libgtk-3-dev is not actually
+      required, package builds fine without it; libgtk2.0-0 or libgtk-3-0
+      should be explicitly declared instead in bdeps and tests;
+      libxrandr-dev should be explicitly added as it is required and was
+      being included due to libgtk-3-dev dependency.
+    - Set minimum dependency on jtreg based on testsuite requirements.
+    - Fail during pre-build if installed jtreg version is lower then
+      the minimum required version.
+    - Improve and fix build tests and autopkgtests:
+      - Depend on default-jre-headless so jtreg will use the
+        JRE from /usr/default-java; remove JT_JAVA exports as it
+        no longer needs to be set.
+      - Update debian/tests/hotspot,jdk,langtools to ignore
+        jtreg-autopkgtest.sh return code.
+      - Create debian/tests/jtdiff-autopkgtest.in as it depends
+        on debian/rules variables.
+      - debian/tests/jtreg-autopkgtest.sh:
+        + Enable retry of failed tests to trim out flaky tests.
+        + Fix unbound variable.
+        + Keep .jtr files from failed tests only.
+      - debian/tests/jtdiff-autopkgtest.sh:
+        + Fail only if an actual regression is detected.
+        + Add the super-diff comparison from jtdiff.
+      - debian/rules:
+        + Preserve all JTreport directories in the test output
+          directory.
+        + Use JDK_DIR instead of JDK_TO_TEST for autopkgtest
+          generation.
+        + Package all .jtr files from JTwork as jtreg-autopkgtest.sh
+          makes sure it contains only failing tests.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 04 Sep 2019 16:36:07 +0200
 
 openjdk-lts (11.0.4+11-1ubuntu1) eoan; urgency=medium
 
@@ -55,11 +124,6 @@ openjdk-lts (11.0.4+11-1ubuntu1) eoan; urgency=medium
       - S8222678, CVE-2019-2821: Improve TLS negotiation.
     - Fix more build issues for Ubuntu precise builds.
     - Bump standards version.
-
-  [ Tiago Stürmer Daitx ]
-  * Fix unbound variable debian/tests/jtreg-autopkgtest.in.
-  * Regenerate debian/tests/jtreg-autopkgtest.sh to fix wrong path.
-  * Force jtdiff to return success.
 
  -- Matthias Klose <doko@ubuntu.com>  Wed, 17 Jul 2019 02:37:32 +0200
 
