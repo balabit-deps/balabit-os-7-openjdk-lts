@@ -1,8 +1,91 @@
-openjdk-lts (11.0.6+10-1ubuntu1~18.04.1) bionic-security; urgency=medium
+openjdk-lts (11.0.7+10-2ubuntu2~18.04) bionic-security; urgency=medium
 
   * Backport from Focal.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 15 Jan 2020 15:14:00 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 15 Apr 2020 21:12:54 +0000
+
+openjdk-lts (11.0.7+10-2ubuntu2) focal; urgency=medium
+
+  * Backport the fix for 8214571 to fix Xdoclint regression.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 15 Apr 2020 20:32:01 +0000
+
+openjdk-lts (11.0.7+10-2ubuntu1) focal; urgency=medium
+
+  * Sync packages with 11.0.7+10-1:
+  * OpenJDK 11.0.7+10 build (release).
+  * Security fixes
+    - JDK-8223898, CVE-2020-2754: Forward references to Nashorn
+    - JDK-8223904, CVE-2020-2755: Improve Nashorn matching
+    - JDK-8224541, CVE-2020-2756: Better mapping of serial ENUMs
+    - JDK-8224549, CVE-2020-2757: Less Blocking Array Queues
+    - JDK-8225603: Enhancement for big integers
+    - JDK-8226346: Build better binary builders
+    - JDK-8227467: Better class method invocations
+    - JDK-8227542: Manifest improved jar headers
+    - JDK-8229733: TLS message handling improvements
+    - JDK-8231415, CVE-2020-2773: Better signatures in XML
+    - JDK-8231785: Improved socket permissions
+    - JDK-8232424, CVE-2020-2778: More constrained algorithms
+    - JDK-8232581, CVE-2020-2767: Improve TLS verification
+    - JDK-8233250: Better X11 rendering
+    - JDK-8233410: Better Build Scripting
+    - JDK-8234027: Better JCEKS key support
+    - JDK-8234408, CVE-2020-2781: Improve TLS session handling
+    - JDK-8234825, CVE-2020-2800: Better Headings for HTTP Servers
+    - JDK-8234841, CVE-2020-2803: Enhance buffering of byte buffers
+    - JDK-8235274, CVE-2020-2805: Enhance typing of methods
+    - JDK-8235691, CVE-2020-2816: Enhance TLS connectivity
+    - JDK-8236201, CVE-2020-2830: Better Scanner conversions
+    - JDK-8238960: linux-i586 builds are inconsistent as the newly build
+      jdk is not able to reserve enough space for object heap
+  * Refresh patches.
+  * Configure --with-jtreg=/usr/share/jtreg.
+  * Enable the buildwatch script on sh4 (Adrian Glaubitz). Closes: #956728.
+  * Build with -march=z13 -mtune=z15 on Ubuntu/s390x.
+
+  * Sync packages with 11.0.7+10-2:
+  * Backport the fix for 8228407, JVM crashes with shared archive file mismatch.
+  * Enable again bootcycle build for all hotspot architectures.
+  * Build again with -march=zEC12 on Ubuntu/s390x.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 15 Apr 2020 16:06:06 +0200
+
+openjdk-lts (11.0.7+9-1ubuntu1) focal; urgency=medium
+
+  * Sync packages with 11.0.7+9-1:
+  * OpenJDK 11.0.7+9 build (early access).
+  * Make autopkgtests cross-test-friendly (Steve Langasek). LP: #1861467.
+  * d/tests/jtreg-autopkgtest.in: keep generated hs_err log files
+    with test artifacts to improve later debug (Tiago Stürmer Daitx).
+  * d/tests/jtdiff-autopkgtest.in: set default vm to correctly locate (Tiago
+    Stürmer Daitx)
+  * jhsdb isn't built on sh4 (Adrian Glaubitz). Closes: #951774.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 26 Mar 2020 10:58:31 +0100
+
+openjdk-lts (11.0.6+10-2ubuntu2) focal; urgency=medium
+
+  [ Steve Langasek ]
+  * Make autopkgtests cross-test-friendly. LP: #1861467.
+
+  [ Tiago Stürmer Daitx ]
+  * d/tests/jtreg-autopkgtest.in: keep generated hs_err log files
+    with test artifacts to improve later debug.
+  * d/tests/jtdiff-autopkgtest.in: set default vm to correctly locate
+    test resuts when it defaults to zerovm.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 20 Feb 2020 22:21:20 +0000
+
+openjdk-lts (11.0.6+10-2ubuntu1) focal; urgency=medium
+
+  * Sync packages with 11.0.6+10-2:
+  * Fix FTCBFS (Helmut Grohne). Addresses: #949460.
+    - Missing Build-Depends: zlib1g-dev:native.
+    - Use triplet-prefixed objcopy and strip.
+  * Bump standards version.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 12 Feb 2020 09:39:37 +0100
 
 openjdk-lts (11.0.6+10-1ubuntu1) focal; urgency=medium
 

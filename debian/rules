@@ -28,6 +28,9 @@ DEB_BUILD_ARCH		?= $(call vafilt,$(DPKG_VARS),DEB_BUILD_ARCH)
 DEB_HOST_ARCH_CPU	?= $(call vafilt,$(DPKG_VARS),DEB_HOST_ARCH_CPU)
 DEB_HOST_MULTIARCH	?= $(call vafilt,$(DPKG_VARS),DEB_HOST_MULTIARCH)
 
+OBJCOPY := $(DEB_HOST_GNU_TYPE)-objcopy
+STRIP := $(DEB_HOST_GNU_TYPE)-strip
+
 PATH := $(CURDIR)/bin:$(PATH)
 export PATH
 
@@ -53,7 +56,6 @@ jtreg_archs	= $(hotspot_archs) alpha ia64 powerpc powerpcspe ppc64 sh4 x32
 
 # FIXME: use bootcycle builds for zero archs?
 bootcycle_build = $(if $(filter $(DEB_HOST_ARCH), $(hotspot_archs)),yes)
-bootcycle_build = $(if $(filter $(DEB_HOST_ARCH), amd64 i386),yes)
 zbootcycle_build =
 ifneq ($(DEB_HOST_ARCH),$(DEB_BUILD_ARCH))
   bootcycle_build =
@@ -70,7 +72,6 @@ else
   is_default = yes
 endif
 
-# FIXME: change that after the buster freeze for ea builds
 is_upstream_release = yes
 
 srcdir		= .
@@ -346,6 +347,18 @@ EXTRA_BUILD_ENV += IGNORE_OLD_CONFIG=true
 
 EXTRA_BUILD_ENV += LIBFFI_LIBS=-lffi_pic
 
+EXTRA_BUILD_ENV += JOBS=$(NJOBS)
+
+ifeq ($(derivative),Ubuntu)
+  ifeq ($(DEB_HOST_ARCH),s390x)
+    ifneq (,$(filter $(distrel), trusty xenial bionic eoan focal))
+      export VENDOR_FLAGS_CPU = -march=zEC12
+    else
+      export VENDOR_FLAGS_CPU = -march=z13 -mtune=z15
+    endif
+  endif
+endif
+
 CONFIGURE_ARGS += --enable-system-kerberos
 
 ifeq ($(with_nss),yes)
@@ -395,7 +408,11 @@ ifneq (,$(filter $(DEB_HOST_ARCH), ppc64 ppc64el))
 endif
 
 ifeq ($(with_check),yes)
-  COMMON_CONFIGURE_ARGS += --with-jtreg=/usr
+  ifneq (,$(filter $(distrel), precise trusty xenial bionic eoan etch wheezy jessie stretch buster))
+    COMMON_CONFIGURE_ARGS += --with-jtreg=/usr
+  else
+    COMMON_CONFIGURE_ARGS += --with-jtreg=/usr/share/jtreg
+  endif
 endif
 
 ifneq (,$(filter $(DEB_HOST_ARCH), amd64))
@@ -516,7 +533,7 @@ jdk_hl_tools	= jar jarsigner javac javadoc javap jcmd jdb \
 ifneq (,$(filter $(DEB_HOST_ARCH), amd64 arm64))
   jdk_hl_tools	+= jaotc
 endif
-ifeq (,$(filter $(DEB_HOST_ARCH), alpha armel ia64 m68k mips mipsel mips64el powerpc riscv64 s390x x32))
+ifeq (,$(filter $(DEB_HOST_ARCH), alpha armel ia64 m68k mips mipsel mips64el powerpc riscv64 s390x sh4 x32))
   jdk_hl_tools	+= jhsdb
 endif
 jdk_tools	= jconsole
@@ -577,7 +594,7 @@ else ifneq (,$(filter $(distrel),buster bionic cosmic disco))
 else
   bd_gcc = g++-9 <!cross>,
 endif
-bd_syslibs = zlib1g-dev, libattr1-dev,
+bd_syslibs = zlib1g-dev:native, zlib1g-dev, libattr1-dev,
 ifneq (,$(filter $(distrel),squeeze lucid))
   bd_syslibs += libpng12-dev, libjpeg62-dev,
 else ifneq (,$(filter $(distrel),wheezy precise quantal raring saucy))
@@ -990,7 +1007,7 @@ build: pre-build $(build_stamps)
 
 stamps/build: stamps/configure
 	@echo '========== $@ =========='
-ifneq (,$(filter $(DEB_HOST_ARCH), alpha armel armhf ia64 m68k mips mipsel mips64 mips64el powerpc powerpcspe riscv64 s390x sparc sparc64))
+ifneq (,$(filter $(DEB_HOST_ARCH), alpha armel armhf ia64 m68k mips mipsel mips64 mips64el powerpc powerpcspe riscv64 s390x sh4 sparc sparc64))
 	sh -c 'sh debian/buildwatch.sh $(CURDIR)/$(builddir) &'
 endif
 	if $(EXTRA_BUILD_ENV) $(MAKE) -C $(builddir) $(build_target); then \
@@ -1735,18 +1752,18 @@ ifeq (,$(findstring nostrip, $(DEB_BUILD_OPTIONS)))
 	    id=$$(echo $$i | sed -r 's,debian/[^/]+,$(d_dbg)/usr/lib/debug,'); \
 	    echo strip $$i; \
 	    mkdir -p $$(dirname $$id); \
-	    objcopy --only-keep-debug $$i $$id; \
+	    $(OBJCOPY) --only-keep-debug $$i $$id; \
 	    chmod 644 $$id; \
-	    strip --remove-section=.comment --remove-section=.note \
+	    $(STRIP) --remove-section=.comment --remove-section=.note \
 	      --strip-debug $$i; \
-	    objcopy --add-gnu-debuglink $$id $$i; \
+	    $(OBJCOPY) --add-gnu-debuglink $$id $$i; \
 	  else \
 	    d=usr/lib/debug/.build-id/$${b_id:0:2}; \
 	    f=$${b_id:2}.debug; \
 	    mkdir -p $(d_dbg)/$$d; \
-	    objcopy --only-keep-debug --compress-debug-sections $$i $(d_dbg)/$$d/$$f; \
+	    $(OBJCOPY) --only-keep-debug --compress-debug-sections $$i $(d_dbg)/$$d/$$f; \
 	    chmod 644 $(d_dbg)/$$d/$$f; \
-	    strip --remove-section=.comment --remove-section=.note $$i; \
+	    $(STRIP) --remove-section=.comment --remove-section=.note $$i; \
 	  fi; \
 	done
 endif
@@ -1768,7 +1785,7 @@ endif
 
 is_release		= yes
 hg_project		= jdk11u
-hg_tag			= jdk-11.0.6+10
+hg_tag			= jdk-11.0.7+10
 package_version		= $(subst jdk-,,$(hg_tag))
 ifneq ($(is_release),yes)
   package_version	:= $(subst +,~,$(package_version))
