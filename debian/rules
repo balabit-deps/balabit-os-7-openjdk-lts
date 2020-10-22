@@ -91,21 +91,17 @@ else
 endif
 jvmver		= 1.11.0
 shortver	= 11
-v_upstream	:= $(shell echo $(PKGVERSION) | sed 's/-[^-][^-]*$$//')
+v_upstream	:= $(shell echo $(PKGVERSION) | sed 's/-[^-]\+$$//')
 v_pkgrel	:= $(shell echo $(PKGVERSION) | sed 's/^.*-//')
-# FIXME. currently v_upstream like 11~4
+# sanitize it as --with-version-opt only allows '[a-z][A-Z][0-9].-'
+v_pkgrelsan	:= $(shell echo $(v_pkgrel) | tr -c '[a-z][A-Z][0-9].\n-' '.')
 v_upbase	:= $(word 1, $(subst +, , $(v_upstream)))
 v_upbuild	:= $(word 2, $(subst +, , $(v_upstream)))
-#v_upbase	:= $(word 1, $(subst ~, , $(v_upstream)))
-#v_upbuild	:= $(word 2, $(subst ~, , $(v_upstream)))
-# that should be the package version ...
 
+# that should be the package version ...
 ifneq ($(PKGVERSION),$(v_upbase)+$(v_upbuild)-$(v_pkgrel))
   $(error wrong version: $(v_upbase)+$(v_upbuild)-$(v_pkgrel) should be: $(PKGVERSION))
 endif
-#ifneq ($(PKGVERSION),$(v_upbase)~$(v_upbuild)-$(v_pkgrel))
-#  $(error wrong version: $(v_upbase)~$(v_upbuild)-$(v_pkgrel) should be: $(PKGVERSION))
-#endif
 
 ifneq (,$(DEB_HOST_MULTIARCH))
   jdirname	= java-$(shortver)-$(origin)-$(DEB_HOST_ARCH)
@@ -295,9 +291,12 @@ else ifneq (,$(filter $(distrel),artful bionic))
 else ifneq (,$(filter $(distrel),buster precise bionic cosmic disco))
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-8
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-8
-else
+else ifneq (,$(filter $(distrel),focal))
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-9
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-9
+else
+  export CC = $(DEB_HOST_GNU_TYPE)-gcc-10
+  export CXX = $(DEB_HOST_GNU_TYPE)-g++-10
 endif
 
 # until we are able to b-d on gcc-for-host ...
@@ -450,7 +449,7 @@ endif
 COMMON_CONFIGURE_ARGS += \
 	--with-version-pre='$(if $(filter yes, $(is_upstream_release)),,ea)' \
 	--with-version-build='$(v_upbuild)' \
-	--with-version-opt='post-$(distribution)-$(v_pkgrel)' \
+	--with-version-opt='$(distribution)-$(v_pkgrelsan)' \
 
 COMMON_CONFIGURE_ARGS += \
 	--with-debug-level=release \
@@ -590,8 +589,10 @@ else ifneq (,$(filter $(distrel),precise))
   bd_gcc = g++-8,
 else ifneq (,$(filter $(distrel),buster bionic cosmic disco))
   bd_gcc = g++-8 <!cross>,
-else
+else ifneq (,$(filter $(distrel),focal))
   bd_gcc = g++-9 <!cross>,
+else
+  bd_gcc = g++-10 <!cross>,
 endif
 bd_syslibs = zlib1g-dev:native, zlib1g-dev, libattr1-dev,
 ifneq (,$(filter $(distrel),squeeze lucid))
@@ -1141,7 +1142,7 @@ clean: debian-clean
 	rm -f bin/{jtreg.tmwrc,my-jtreg-run,my-xvfb-run,auto*,ifnames}
 	rm -f buildwatch.pid
 	rm -f config.log configure.log
-	dh_clean
+	dh_clean -Xtest/jaxp/javax/xml/jaxp/functional/test/astro/xmlfiles/catalog.xml.bak
 
 debian-clean:
 	dh_testdir
@@ -1405,7 +1406,7 @@ endif
 	: # copy apport hook
 ifeq ($(derivative),Ubuntu)
 	mkdir -p $(d)/usr/share/apport/package-hooks/
-	cp debian/apport-hook.py $(d)/usr/share/apport/package-hooks/source_$(basename).py
+	cp debian/apport-hook.py $(d)/usr/share/apport/package-hooks/source_$(PKGSOURCE).py
 endif
 
 	: # move demos and samples, create symlinks for $(p_demo)
@@ -1782,41 +1783,6 @@ endif
 	NO_PKG_MANGLE=1 \
 	dh_builddeb -a $(nodemo) $(nojrez) #$(bd_options)
 
-is_release		= yes
-hg_project		= jdk11u
-hg_tag			= jdk-11.0.8+10
-package_version		= $(subst jdk-,,$(hg_tag))
-ifneq ($(is_release),yes)
-  package_version	:= $(subst +,~,$(package_version))
-endif
-hg_url			= http://hg.openjdk.java.net/jdk-updates/$(hg_project)
-origdir = ../$(basename)-$(package_version).orig
-topdir = $(basename)-$(package_version)
-get-orig:
-	mkdir $(origdir)
-	wget -O $(origdir)/jdk.tar.bz2 $(hg_url)/archive/$(hg_tag).tar.bz2
-
-	set -ex; \
-	repo=jdk; \
-	d=$$(tar tf $(origdir)/$$repo.tar.bz2 | head -1 | sed 's,/.*,,'); \
-	tar xf $(origdir)/$$repo.tar.bz2; \
-	chmod 755 $$d/configure; \
-	case $$repo in jdk) \
-	  rm -v -rf $$d/src/java.base/share/native/libzip/zlib; \
-	  find $$d/src/java.desktop/share/native/libjavajpeg \
-	    ! -name imageioJPEG.c ! -name jpegdecoder.c ! -name jinclude.h \
-	    -type f -print -delete; \
-	  rm -v -rf $$d/src/java.desktop/share/native/libsplashscreen/giflib; \
-	  rm -v -rf $$d/src/java.desktop/share/native/libsplashscreen/libpng; \
-	  rm -v -f $$d/src/java.desktop/share/native/liblcms/cms*.c; \
-	  rm -v -f $$d/src/java.desktop/share/native/liblcms/lcms2*.h; \
-	  rm -v -rf $$d/src/java.smartcardio/unix/native/libj2pcsc/MUSCLE; \
-	esac; \
-	mv $$d $(topdir); \
-	tar cfJ ../$(basename)_$(package_version).orig.tar.xz $(topdir); \
-	rm -rf $(topdir)
-
-	rm -f ../$(origdir)
 
 binary: binary-arch binary-indep
 .PHONY: build build-arch build-indep clean binary-indep binary-arch binary install packaging-files

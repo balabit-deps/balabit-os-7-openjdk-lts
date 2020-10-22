@@ -1,8 +1,76 @@
-openjdk-lts (11.0.8+10-0ubuntu1~18.04.1) bionic-security; urgency=medium
+openjdk-lts (11.0.9+11-0ubuntu1~18.04.1) bionic-security; urgency=medium
 
   * Backport from Groovy.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 15 Jul 2020 20:45:24 +0000
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 22 Oct 2020 05:32:59 +0000
+
+openjdk-lts (11.0.9+11-0ubuntu1) groovy; urgency=medium
+
+  * OpenJDK 11.0.9+11 build (release).
+  * Security fixes:
+    - JDK-8233624: Enhance JNI linkage
+    - JDK-8236196: Improve string pooling
+    - JDK-8236862, CVE-2020-14779: Enhance support of Proxy class
+    - JDK-8237990, CVE-2020-14781: Enhanced LDAP contexts
+    - JDK-8237995, CVE-2020-14782: Enhance certificate processing
+    - JDK-8240124: Better VM Interning
+    - JDK-8241114, CVE-2020-14792: Better range handling
+    - JDK-8242680, CVE-2020-14796: Improved URI Support
+    - JDK-8242685, CVE-2020-14797: Better Path Validation
+    - JDK-8242695, CVE-2020-14798: Enhanced buffer support
+    - JDK-8243302: Advanced class supports
+    - JDK-8244136, CVE-2020-14803: Improved Buffer supports
+    - JDK-8244479: Further constrain certificates
+    - JDK-8244955: Additional Fix for JDK-8240124
+    - JDK-8245407: Enhance zoning of times
+    - JDK-8245412: Better class definitions
+    - JDK-8245417: Improve certificate chain handling
+    - JDK-8248574: Improve jpeg processing
+    - JDK-8249927: Specify limits of jdk.serialProxyInterfaceLimit
+    - JDK-8253019: Enhanced JPEG decoding
+
+  [ Matthias Klose ]
+  * Call strip-nondeterminism before computing jmod hashes (Julian Gilbey).
+    Closes: #944738.
+  * Build with GCC 10 in current development versions. Closes: #972288.
+
+  [ Tiago Stürmer Daitx ]
+  * debian/rules:
+    - remove get-orig, gbp import-orig uses uscan and is configured
+      to clean the orig package.
+    - sanitize v_pkgrel to use in version-opt as it deletes
+      any character not in [-.a-zA-Z0-9].
+    - prevent deletion of test file on dh_clean.
+  * debian/generate-debian-orig.sh, debian/update-hgrev.sh: remove
+    outdated files that no longer work.
+  * debian/watch: fetch from github and only scan for numeric tags.
+  * debian/patches/jdk-8254177-tzdata2020b.patch: update to latest
+    tzdata.
+  * debian/JB-jre-headless.postinst.in: replace tempfile calls with
+    mktemp. Closes: #972245.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 22 Oct 2020 05:15:02 +0000
+
+openjdk-lts (11.0.9+10-0ubuntu1) groovy; urgency=medium
+
+  * OpenJDK 11.0.9+9 build (early access).
+  * debian/rules:
+    - copy apport hook to source_$(PKGSOURCE).py.
+    - untar upstream tarball directly and avoid the unnecessary
+      intermediate directory.
+    - get tar to clamp mtime based on changelog's date entry and
+      name the origtarball from $PKGSOURCE instead of basename.
+  * debian/patches/Don-t-optimize-fdlibm-fork-for-Zero-on-linux-sparc-Z.patch,
+    debian/patches/generated-headers.patch,
+    debian/patches/icc_loading_with_symlink.diff,
+    debian/patches/jdk-getAccessibleValue.diff,
+    debian/patches/jexec.diff, debian/patches/jtreg-location.diff, 
+    debian/patches/reproducible-build-user.diff, debian/patches/riscv64.diff,
+    debian/patches/s390x-opt.diff, debian/patches/system-pcsclite.diff,
+    debian/patches/workaround_expand_exec_shield_cs_limit.diff,
+    debian/patches/zero-x32.diff: refresh patches.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 08 Oct 2020 14:57:00 +0000
 
 openjdk-lts (11.0.8+10-0ubuntu1) groovy; urgency=medium
 
