@@ -1,3 +1,40 @@
+openjdk-lts (11.0.9.1+1-0ubuntu1~18.04) bionic-security; urgency=medium
+
+  * Backport from Hirsute.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 10 Nov 2020 04:18:42 +0000
+
+openjdk-lts (11.0.9.1+1-0ubuntu1) hirsute; urgency=medium
+
+  * OpenJDK 11.0.9+11 build (release).
+
+  [ Matthias Klose ]
+  * Configure --with-jvm-features=shenandoahgc for hotspot builds.
+    LP: #1902029.
+
+  [ Tiago Stürmer Daitx ]
+  * Filter out recurring failed tests.
+    - debian/failed-tests-problemlist.txt: list of tests known to
+      have failed in the past.
+    - debian/tests/control: add zip as some tests depend on it.
+    - debian/tests/hotspot, debian/tests/jaxp, debian/test/jdk,
+      debian/tests/langtools: exclude tests listed as failed tests,
+      exit if jtreg exits 77 as no test was actually ran.
+    - debian/tests/jtreg-autopkgtest.in: reduce retries from 3 to 2,
+      exit early if test results are the same on retry, output time
+      along name and status.
+    - debian/tests/jtreg-autopkgtest.sh: regenerated.
+    - d/p/hotspot-test-fix-npe-on-missing-file.patch: recurse only
+      if src file exists, fixes test when libatk is a dangling link.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Mon, 09 Nov 2020 15:46:20 +0000
+
+openjdk-lts (11.0.9+11-0ubuntu2) hirsute; urgency=medium
+
+  * d/p/jdk-8254982-tzdata2020c.patch: update to tzdata2020c.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Mon, 26 Oct 2020 03:20:49 +0000
+
 openjdk-lts (11.0.9+11-0ubuntu1~18.04.1) bionic-security; urgency=medium
 
   * Backport from Groovy.

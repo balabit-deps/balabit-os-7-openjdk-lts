@@ -4,5 +4,8 @@ set -o errtrace
 set -o pipefail
 set -o nounset
 
-debian/tests/jtreg-autopkgtest.sh langtools -exclude:test/langtools/ProblemList.txt -dir:test/langtools jdk tools lib || true
+debian/tests/jtreg-autopkgtest.sh langtools -exclude:test/langtools/ProblemList.txt -exclude:debian/failed-tests-problemlist.txt -dir:test/langtools jdk tools lib && jtreg_exit=0 || jtreg_exit=$?
+
+[ $jtreg_exit -eq 77 ] && exit 77
+
 debian/tests/jtdiff-autopkgtest.sh langtools

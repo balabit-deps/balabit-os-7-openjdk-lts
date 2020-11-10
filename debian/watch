@@ -1,4 +1,4 @@
 version=4
 opts="" \
 https://github.com/openjdk/jdk11u/tags \
-.*/jdk-(11\.[0-9]+\.[0-9]+\+[0-9]+).tar.gz
+.*/jdk-([0-9.]*\+[0-9]*).tar.gz

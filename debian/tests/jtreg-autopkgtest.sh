@@ -82,13 +82,13 @@ trap "cleanup" EXIT INT TERM ERR
 jtwork_dir="${AUTOPKGTEST_TMP}/${testsuite}/JTwork"
 output_dir="${AUTOPKGTEST_ARTIFACTS}/${testsuite}/"
 
-# retry tests with "fail" or "error" status at most 3 times
-for i in 0 1 2 3; do
+# retry tests with "fail" or "error" status at most 2 times
+for i in 0 1 2; do
   # save each try under its own folder to preserve history
   report_path="${i}/JTreport"
   report_dir="${output_dir}/${report_path}"
   jtreg ${jt_options} \
-    -verbose:summary \
+    -verbose:summary,time \
     -automatic \
     -retain:none \
     -ignore:quiet \
@@ -116,9 +116,8 @@ for i in 0 1 2 3; do
 
   # break if jtdiff reports no difference from previous run
   # also deletes the just created JTreport
-  # DISABLED: don't use it for now as flaky tests could still pass given more retries
-  #jtdiff "${output_dir}/JTreport" "$report_dir" >/dev/null 2>&1 \
-  #  && rm -rf "${report_dir}" && break
+  jtdiff "${output_dir}/JTreport" "$report_dir" >/dev/null 2>&1 \
+    && rm -rf "${report_dir}" && break
 
   # link latest JTreport to output_dir
   ln -sf -t "${output_dir}" "${report_path}"

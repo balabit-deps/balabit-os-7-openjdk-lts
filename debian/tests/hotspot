@@ -6,7 +6,10 @@ set -o nounset
 
 debian/tests/jtreg-autopkgtest.sh hotspot \
 	-exclude:test/hotspot/jtreg/ProblemList.txt \
+	-exclude:debian/failed-tests-problemlist.txt \
 	-dir:test/hotspot/jtreg \
-	:hotspot_compiler :hotspot_gc :hotspot_runtime :hotspot_serviceability || true
+	:hotspot_compiler :hotspot_gc :hotspot_runtime :hotspot_serviceability && jtreg_exit=0 || jtreg_exit=$?
+
+[ $jtreg_exit -eq 77 ] && exit 77
 
 debian/tests/jtdiff-autopkgtest.sh hotspot
