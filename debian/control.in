@@ -18,10 +18,10 @@ Build-Depends: @bd_debhelper@
   @bd_nss@
   @bd_cross@
 Build-Depends-Indep: graphviz, pandoc,
-Standards-Version: 4.5.0
-Homepage: http://openjdk.java.net/
-Vcs-Git: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk -b openjdk-11
-Vcs-Browser: https://code.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk/+ref/openjdk-11
+Standards-Version: 4.5.1
+Homepage: https://openjdk.java.net/
+Vcs-Browser: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk/log/?h=openjdk-lts/ubuntu/bionic
+Vcs-Git: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk -b openjdk-lts/ubuntu/bionic
 
 Package: @basename@-jdk-headless
 Architecture: @any_archs@

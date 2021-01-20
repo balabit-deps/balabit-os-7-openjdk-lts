@@ -88,7 +88,7 @@ for i in 0 1 2; do
   report_path="${i}/JTreport"
   report_dir="${output_dir}/${report_path}"
   jtreg ${jt_options} \
-    -verbose:summary,time \
+    -verbose:summary \
     -automatic \
     -retain:none \
     -ignore:quiet \

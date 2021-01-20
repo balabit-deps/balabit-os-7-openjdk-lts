@@ -1,3 +1,30 @@
+openjdk-lts (11.0.10+9-0ubuntu1~18.04) bionic-security; urgency=medium
+
+  * Backport from Hirsute.
+  * Update VCS attributes.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 20 Jan 2021 02:32:18 +0000
+
+openjdk-lts (11.0.10+9-0ubuntu1) hirsute; urgency=medium
+
+  * OpenJDK 11.0.10+9 build (release).
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 19 Jan 2021 20:45:06 +0000
+
+openjdk-lts (11.0.10+8-0ubuntu1) hirsute; urgency=medium
+
+  * OpenJDK 11.0.10+8 build (early access).
+
+  [ Matthias Klose ]
+  * Build with system harfbuzz.
+  * Refresh patches.
+  * Bump standards version.
+
+  [ Tiago Stürmer Daitx ]
+  * Update VCS attributes.
+
+ -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 06 Jan 2021 22:11:55 +0000
+
 openjdk-lts (11.0.9.1+1-0ubuntu1~18.04) bionic-security; urgency=medium
 
   * Backport from Hirsute.

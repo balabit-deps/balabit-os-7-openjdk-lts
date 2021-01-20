@@ -45,6 +45,5 @@ reproducible-module-info.diff
 reproducible-copyright-headers.diff
 reproducible-build-user.diff
 reproducible-build-jmod.diff
-jdk-8254177-tzdata2020b.patch
-jdk-8254982-tzdata2020c.patch
 hotspot-test-fix-npe-on-missing-file.patch
+harfbuzz-cflags.diff
