@@ -1,9 +1,81 @@
-openjdk-lts (11.0.10+9-0ubuntu1~18.04) bionic-security; urgency=medium
+openjdk-lts (11.0.11+9-0ubuntu2~18.04) bionic-security; urgency=medium
 
-  * Backport from Hirsute.
-  * Update VCS attributes.
+  * Backport the security update to 18.04 LTS.
 
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 20 Jan 2021 02:32:18 +0000
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 21 Apr 2021 11:15:32 +0200
+
+openjdk-lts (11.0.11+9-0ubuntu2) hirsute; urgency=medium
+
+  * OpenJDK 11.0.11+9 build (release).
+  * Security fixes:
+    - JDK-8244473: Contextualize registration for JNDI.
+    - JDK-8244543: Enhanced handling of abstract classes.
+    - JDK-8250568: Less ambiguous processing (CVE-2021-2161).
+    - JDK-8253799: Make lists of normal filenames.
+    - JDK-8249906: Enhance opening JARs (CVE-2021-2163).
+    - JDK-8257001: Improve HTTP client support.
+  * Mark the build as an upstream release.
+
+ -- Matthias Klose <doko@ubuntu.com>  Wed, 21 Apr 2021 10:55:38 +0200
+
+openjdk-lts (11.0.11+8-0ubuntu2) hirsute; urgency=medium
+
+  * OpenJDK 11.0.11+8 build (early access).
+
+  * Sync packages with 11.0.11+8-1:
+  * Set DEB_BUILD_MAINT_OPTIONS = optimize=-lto, not yet ready. Looks
+    like 16 and 17 are buildable with lto.
+  * Remove dangling jfr alternative on upgrades if no jdk is installed (Andreas
+    Beckmann). Closes: #985060.
+  * Use mktemp instead of tempfile in maintainer scripts (Andreas Beckmann).
+  * Backport fix for JDK-8262085, hovering Metal HTML Tooltips in different
+    windows cause IllegalArgExc on Linux. Closes: #967049.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 01 Apr 2021 12:31:47 +0200
+
+openjdk-lts (11.0.11+7-0ubuntu1) hirsute; urgency=medium
+
+  * OpenJDK 11.0.11+7 build (early access).
+
+  * Sync packages with 11.0.11+7-1:
+  * Simplify compiler selection for backports.
+  * Don't use the triplet-prefixed binutils tools for backports.
+
+ -- Matthias Klose <doko@ubuntu.com>  Thu, 18 Mar 2021 10:05:21 +0100
+
+openjdk-lts (11.0.11+4-0ubuntu2) hirsute; urgency=medium
+
+  * Don't build zero on armhf, still fails to build.
+
+ -- Matthias Klose <doko@ubuntu.com>  Sat, 27 Feb 2021 15:35:01 +0100
+
+openjdk-lts (11.0.11+4-0ubuntu1) hirsute; urgency=medium
+
+  * OpenJDK 11.0.11+4 build (early access).
+
+  * Sync packages with 11.0.11+4-1:
+  * reproducible-build-jmod.diff: Fall back to the unpatched behavior
+    for backports.
+  * Only build with system harfbuzz for recent releases.
+  * Configure --with-copyright-year. Closes: #956154.
+
+  * Sync packages with 11.0.11+3-3:
+  * Fix the build logic, jaotc and jhsdb tools not available on all archs.
+  * Ship the jfc files used by jfr.
+  * Move libawt_xawt.so, libjawt.so into the jre package. Closes: #908058.
+
+  * Sync packages with 11.0.11+3-2:
+  * OpenJDK 11.0.11+3 build (early access).
+  * Use debugedit to generate unique build-id's and remove the openjdk-N-dbg
+    file conflicts. Closes: #919671.
+  * Remove KFreeBSD build support and patches, not updated since OpenJDK 8.
+  * Backport JDK-8222825. Closes: #960153.
+  * Build with Rules-Requires-Root: no.
+  * Move the jfr binary from -jre-headless to -jdk-headless. Development tool.
+
+  * Build zero again on armhf.
+
+ -- Matthias Klose <doko@ubuntu.com>  Fri, 26 Feb 2021 17:01:44 +0100
 
 openjdk-lts (11.0.10+9-0ubuntu1) hirsute; urgency=medium
 
@@ -24,12 +96,6 @@ openjdk-lts (11.0.10+8-0ubuntu1) hirsute; urgency=medium
   * Update VCS attributes.
 
  -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Wed, 06 Jan 2021 22:11:55 +0000
-
-openjdk-lts (11.0.9.1+1-0ubuntu1~18.04) bionic-security; urgency=medium
-
-  * Backport from Hirsute.
-
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Tue, 10 Nov 2020 04:18:42 +0000
 
 openjdk-lts (11.0.9.1+1-0ubuntu1) hirsute; urgency=medium
 
@@ -61,12 +127,6 @@ openjdk-lts (11.0.9+11-0ubuntu2) hirsute; urgency=medium
   * d/p/jdk-8254982-tzdata2020c.patch: update to tzdata2020c.
 
  -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Mon, 26 Oct 2020 03:20:49 +0000
-
-openjdk-lts (11.0.9+11-0ubuntu1~18.04.1) bionic-security; urgency=medium
-
-  * Backport from Groovy.
-
- -- Tiago Stürmer Daitx <tiago.daitx@ubuntu.com>  Thu, 22 Oct 2020 05:32:59 +0000
 
 openjdk-lts (11.0.9+11-0ubuntu1) groovy; urgency=medium
 

@@ -6,8 +6,8 @@ XSBC-Original-Maintainer: OpenJDK Team <openjdk@lists.launchpad.net>
 Uploaders: Matthias Klose <doko@ubuntu.com>
 Build-Depends: @bd_debhelper@
   m4, lsb-release, zip, unzip,
-  sharutils, gawk, cpio, pkg-config, procps, wdiff, time, @bd_fastjar@
-  strip-nondeterminism,
+  sharutils, gawk, cpio, pkg-config, procps, wdiff, @bd_fastjar@
+  time, @bd_strip_ndt@ @bd_debugedit@
   @bd_check@
   @bd_autotools@ @bd_ant@
   @bd_gcc@
@@ -19,9 +19,10 @@ Build-Depends: @bd_debhelper@
   @bd_cross@
 Build-Depends-Indep: graphviz, pandoc,
 Standards-Version: 4.5.1
+Rules-Requires-Root: no
 Homepage: https://openjdk.java.net/
-Vcs-Browser: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk/log/?h=openjdk-lts/ubuntu/bionic
-Vcs-Git: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk -b openjdk-lts/ubuntu/bionic
+Vcs-Browser: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk/log/?h=openjdk-lts/ubuntu/hirsute
+Vcs-Git: https://git.launchpad.net/~openjdk/ubuntu/+source/openjdk/+git/openjdk -b openjdk-lts/ubuntu/hirsute
 
 Package: @basename@-jdk-headless
 Architecture: @any_archs@
@@ -35,8 +36,8 @@ Provides: java-sdk-headless, java2-sdk-headless,
   java7-sdk-headless, java8-sdk-headless,
   java9-sdk-headless, java10-sdk-headless,
   java11-sdk-headless, java-compiler
-Conflicts: openjdk-11-jre-headless (<< 11~19-2)
-Replaces: openjdk-11-jre-headless (<< 11~19-2)
+Breaks: openjdk-11-jre-headless (<< 11.0.11+3-2~)
+Replaces: openjdk-11-jre-headless (<< 11.0.11+3-2~)
 Description: OpenJDK Development Kit (JDK) (headless)
  OpenJDK is a development environment for building applications,
  applets, and components using the Java programming language.
@@ -97,6 +98,8 @@ Provides: java-runtime, java2-runtime,
   java7-runtime, java8-runtime,
   java9-runtime, java10-runtime,
   java11-runtime,
+Breaks: openjdk-11-jre-headless (<< 11.0.11+3-3~)
+Replaces: openjdk-11-jre-headless (<< 11.0.11+3-3~)
 Description: OpenJDK Java runtime, using ${vm:Name}
  Full Java runtime environment - needed for executing Java GUI and Webstart
  programs, using ${vm:Name}.
@@ -148,6 +151,7 @@ Depends: @basename@-jre-headless (= ${binary:Version}),
    ${misc:Depends}
 Recommends: @basename@-jre (= ${binary:Version})
 Suggests: @basename@-jdk (= ${binary:Version})
+Conflicts: ${dbg:Conflicts}
 Description: Java runtime based on OpenJDK (debugging symbols)
  OpenJDK is a development environment for building applications,
  applets, and components using the Java programming language.

@@ -28,15 +28,13 @@ DEB_BUILD_ARCH		?= $(call vafilt,$(DPKG_VARS),DEB_BUILD_ARCH)
 DEB_HOST_ARCH_CPU	?= $(call vafilt,$(DPKG_VARS),DEB_HOST_ARCH_CPU)
 DEB_HOST_MULTIARCH	?= $(call vafilt,$(DPKG_VARS),DEB_HOST_MULTIARCH)
 
-OBJCOPY := $(DEB_HOST_GNU_TYPE)-objcopy
-STRIP := $(DEB_HOST_GNU_TYPE)-strip
-
 PATH := $(CURDIR)/bin:$(PATH)
 export PATH
 
 CHANGELOG_VARS := $(shell dpkg-parsechangelog | sed -n 's/ /_/g;/^[^_]/s/^\([^:]*\):_\(.*\)/\1=\2/p')
 PKGSOURCE := $(call vafilt,$(CHANGELOG_VARS),Source)
 PKGVERSION := $(call vafilt,$(CHANGELOG_VARS),Version)
+PKGYEAR := $(shell echo $(call vafilt,$(CHANGELOG_VARS),Timestamp) | date --utc +%Y)
 
 distribution := $(shell lsb_release --id --short)
 distrel := $(shell lsb_release --codename --short)
@@ -47,9 +45,17 @@ ifeq ($(distrel),n/a)
   distrel := sid
 endif
 
+ifneq (,$(filter $(distrel),precise))
+  OBJCOPY := objcopy
+  STRIP := strip
+else
+  OBJCOPY := $(DEB_HOST_GNU_TYPE)-objcopy
+  STRIP := $(DEB_HOST_GNU_TYPE)-strip
+endif
+
 multiarch_dir = /$(DEB_HOST_MULTIARCH)
 
-hotspot_archs	= amd64 i386 arm64 armhf ppc64 ppc64el sparc64 s390x kfreebsd-amd64 kfreebsd-i386
+hotspot_archs	= amd64 i386 arm64 armhf ppc64 ppc64el sparc64 s390x
 jtreg_archs	= $(hotspot_archs) alpha ia64 powerpc powerpcspe ppc64 sh4 x32
 jtreg_archs	+= armel mipsel mips64el
 
@@ -72,7 +78,6 @@ else
 endif
 
 is_upstream_release = yes
-#is_upstream_release = no
 
 srcdir		= .
 builddir	= build
@@ -168,17 +173,18 @@ endif
 
 default_vm = $(if $(filter $(DEB_HOST_ARCH), $(hotspot_archs)),hotspot,zero)
 
-any_archs = alpha amd64 armel armhf arm64 i386 ia64 mips mipsel mips64 mips64el powerpc powerpcspe ppc64 ppc64el m68k riscv64 sh4 sparc sparc64 s390x x32 kfreebsd-i386 kfreebsd-amd64
+any_archs = alpha amd64 armel armhf arm64 i386 ia64 mips mipsel mips64 mips64el powerpc powerpcspe ppc64 ppc64el m68k riscv64 sh4 sparc sparc64 s390x x32
 
 altzero_archs = $(hotspot_archs)
-ifneq (,$(filter $(distrel),trusty))
-  altzero_archs := $(filter-out arm64, $(altzero_archs))
-endif
-# ftbfs in 11.0.5+bx, and 13+17
-altzero_archs := $(filter-out armhf, $(altzero_archs))
+#ifneq (,$(filter $(distrel),trusty))
+#  altzero_archs := $(filter-out arm64, $(altzero_archs))
+#endif
 
 # FIXME: Zero currently FTBFS on sparc64 with gcc-9
 altzero_archs := $(filter-out sparc64, $(altzero_archs))
+
+# ftbfs in 11.0.5+bx, and 13+17
+altzero_archs := $(filter-out armhf, $(altzero_archs))
 
 ifneq (,$(filter noaltzero, $(DEB_BUILD_OPTIONS)))
   altzero_archs =
@@ -207,6 +213,7 @@ endif
 
 # FIXME: ftbfs with -Werror=format-security
 dpkg_buildflags_hs = \
+	DEB_BUILD_MAINT_OPTIONS="optimize=-lto" \
 	DEB_CFLAGS_MAINT_STRIP="-O2 -Werror=format-security" \
 	DEB_CXXFLAGS_MAINT_STRIP="-O2 -Werror=format-security" \
 	DEB_CFLAGS_MAINT_APPEND="-fno-stack-protector -Wno-deprecated-declarations" \
@@ -222,6 +229,7 @@ export EXTRA_CXXFLAGS_HS := $(shell $(dpkg_buildflags_hs) --get CXXFLAGS) -Wno-d
 export EXTRA_LDFLAGS_HS  := $(shell $(dpkg_buildflags_hs) --get LDFLAGS)
 
 dpkg_buildflags_zero = \
+	DEB_BUILD_MAINT_OPTIONS="optimize=-lto" \
 	DEB_CFLAGS_MAINT_STRIP="-O2 -Werror=format-security -fstack-protector -fstack-protector-strong" \
 	DEB_CXXFLAGS_MAINT_STRIP="-O2 -Werror=format-security -fstack-protector -fstack-protector-strong" \
 	DEB_CFLAGS_MAINT_APPEND="-fno-stack-protector -Wno-deprecated-declarations" \
@@ -244,7 +252,9 @@ endif
 # Don't overwrite JDK opt level :
 # 1) with forced -03, it cause wrong Math.* computations, see #679292 and #678228
 # 2) JDK already use it's own OPTIMIZATION_LEVEL variable for each module
-dpkg_buildflags_jdk = DEB_CFLAGS_MAINT_STRIP="-O2" DEB_CXXFLAGS_MAINT_STRIP="-O2"
+dpkg_buildflags_jdk = \
+	DEB_BUILD_MAINT_OPTIONS="optimize=-lto" \
+	DEB_CFLAGS_MAINT_STRIP="-O2" DEB_CXXFLAGS_MAINT_STRIP="-O2"
 dpkg_buildflags_jdk += dpkg-buildflags
 export EXTRA_CPPFLAGS_JDK := $(shell $(dpkg_buildflags_jdk) --get CPPFLAGS)
 export EXTRA_CFLAGS_JDK   := $(shell $(dpkg_buildflags_jdk) --get CFLAGS) $(shell $(dpkg_buildflags_jdk) --get CPPFLAGS)
@@ -252,6 +262,8 @@ export EXTRA_CXXFLAGS_JDK := $(shell $(dpkg_buildflags_jdk) --get CXXFLAGS)
 export EXTRA_LDFLAGS_JDK  := $(shell $(dpkg_buildflags_jdk) --get LDFLAGS)
 
 #for IcedTea
+dpkg_buildflags_it = \
+	DEB_BUILD_MAINT_OPTIONS="optimize=-lto"
 ifeq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
 dpkg_buildflags_it += DEB_CFLAGS_MAINT_STRIP="-O2" DEB_CXXFLAGS_MAINT_STRIP="-O2"
 dpkg_buildflags_it += DEB_CFLAGS_MAINT_APPEND="-O3" DEB_CXXFLAGS_MAINT_APPEND="-O3"
@@ -263,13 +275,15 @@ export EXTRA_CXXFLAGS_IT := $(shell $(dpkg_buildflags_it) --get CXXFLAGS)
 export EXTRA_LDFLAGS_IT  := $(shell $(dpkg_buildflags_it) --get LDFLAGS)
 
 # This section should be in sync with "bd_gcc" definition
-ifneq (,$(filter $(distrel),saucy trusty))
+ifneq (,$(filter $(distrel),saucy))
   export CC = gcc-4.8
   export CXX = g++-4.8
+  bd_gcc = g++-4.8,
 else ifneq (,$(filter $(distrel),utopic vivid jessie))
   export CC = gcc-4.9
   export CXX = g++-4.9
-else ifneq (,$(filter $(distrel),wily xenial))
+  bd_gcc = g++-4.9,
+else ifneq (,$(filter $(distrel),wily))
   ifneq (,$(filter $(DEB_HOST_ARCH), $(hotspot_archs)))
     export CC = $(DEB_HOST_GNU_TYPE)-gcc-5
     export CXX = $(DEB_HOST_GNU_TYPE)-g++-5
@@ -282,22 +296,32 @@ else ifneq (,$(filter $(distrel),wily xenial))
     export CC = $(DEB_HOST_GNU_TYPE)-gcc-4.9
     export CXX = $(DEB_HOST_GNU_TYPE)-g++-4.9
   endif
+  bd_gcc = g++-5 [$(hotspot_archs)], g++-4.9 [$(strip $(foreach a,$(hotspot_archs), !$(a)))], g++-4.9 [arm64],
 else ifneq (,$(filter $(distrel),stretch))
   # FIXME: still hotspot core dumps with GCC 6
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-6
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-6
-else ifneq (,$(filter $(distrel),artful bionic))
+  bd_gcc = g++-6 <!cross>,
+else ifneq (,$(filter $(distrel),artful))
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-7
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-7
-else ifneq (,$(filter $(distrel),buster precise bionic cosmic disco))
+  bd_gcc = g++-7 <!cross>,
+else ifneq (,$(filter $(distrel),buster precise trusty xenial bionic cosmic disco))
+  # FIXME: ftbfs on armhf with the default GCC
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-8
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-8
+  bd_gcc = g++-8,
+  ifneq (,$(filter $(distrel),buster bionic cosmic disco))
+    bd_gcc = g++-8 <!cross>,
+  endif
 else ifneq (,$(filter $(distrel),focal))
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-9
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-9
+  bd_gcc = g++-9 <!cross>,
 else
   export CC = $(DEB_HOST_GNU_TYPE)-gcc-10
   export CXX = $(DEB_HOST_GNU_TYPE)-g++-10
+  bd_gcc = g++-10 <!cross>,
 endif
 
 # until we are able to b-d on gcc-for-host ...
@@ -318,12 +342,6 @@ with_nss = yes
 on_buildd := $(shell [ -f /CurrentlyBuilding -o "$$LOGNAME" = buildd ] && echo yes)
 
 CONFIGURE_ARGS =
-
-# GNU/kFreeBSD don't support epoll syscall so don't try to check of it.
-# FIXME need to check the flag, configure complains about it
-#ifneq (,$(filter $(DEB_HOST_ARCH), kfreebsd-amd64 kfreebsd-i386))
-#  CONFIGURE_ARGS += --disable-compile-against-syscalls
-#endif
 
 # there are problems --with-alt-jar=/usr/bin/fastjar,
 # see http://icedtea.classpath.org/bugzilla/show_bug.cgi?id=217
@@ -455,6 +473,7 @@ COMMON_CONFIGURE_ARGS += \
 	--with-version-pre='$(if $(filter yes, $(is_upstream_release)),,ea)' \
 	--with-version-build='$(v_upbuild)' \
 	--with-version-opt='$(distribution)-$(v_pkgrelsan)' \
+	--with-copyright-year=$(PKGYEAR) \
 
 COMMON_CONFIGURE_ARGS += \
 	--with-debug-level=release \
@@ -465,12 +484,17 @@ COMMON_CONFIGURE_ARGS += \
 	--with-libpng=system \
 	--with-libjpeg=system \
 	--with-lcms=system \
-	--with-harfbuzz=system \
 	--with-pcsclite=system \
 	--disable-warnings-as-errors \
 	--disable-javac-server \
 
-ifneq (,$(filter $(distrel),precise))
+ifeq (,$(filter $(distrel),jessie stretch precise trusty xenial))
+  COMMON_CONFIGURE_ARGS += \
+	--with-harfbuzz=system
+  with_system_hb = yes
+endif
+
+ifneq (,$(filter $(distrel),precise trusty xenial))
   # building with a GCC from a PPA ...
   COMMON_CONFIGURE_ARGS += \
 	--with-stdc++lib=static
@@ -529,15 +553,20 @@ endif
 # dups in heimdal-clients, krb5-user: kinit, klist, ktab, no alternatives
 # have jrunscript in the jdk packages
 
-all_tools	= $(notdir $(wildcard $(builddir)/$(sdkimg)/bin/*))
+all_tools	=  jar jarsigner java javac javadoc javap jcmd \
+	jconsole jdb jdeprscan jdeps jfr jimage jinfo jjs jlink jmap \
+	jmod jps jrunscript jshell jstack jstat jstatd keytool \
+	rmid rmiregistry serialver pack200 unpack200
 
 jdk_hl_tools	= jar jarsigner javac javadoc javap jcmd jdb \
-	jdeprscan jdeps jimage jinfo jlink jmap jmod jps \
+	jdeprscan jdeps jfr jimage jinfo jlink jmap jmod jps \
 	jrunscript jshell jstack jstat jstatd rmic serialver
 ifneq (,$(filter $(DEB_HOST_ARCH), amd64 arm64))
+  all_tools	+= jaotc
   jdk_hl_tools	+= jaotc
 endif
 ifeq (,$(filter $(DEB_HOST_ARCH), alpha armel ia64 m68k mips mipsel mips64el powerpc riscv64 s390x sh4 x32))
+  all_tools	+= jhsdb
   jdk_hl_tools	+= jhsdb
 endif
 jdk_tools	= jconsole
@@ -579,28 +608,11 @@ else
   bd_debhelper = debhelper (>= 11),
 endif
 
-# This section should be in sync with "CC/CXX" definition
-ifneq (,$(filter $(distrel), saucy trusty))
-  bd_gcc = g++-4.8,
-else ifneq (,$(filter $(distrel),utopic vivid jessie))
-  bd_gcc = g++-4.9,
-else ifneq (,$(filter $(distrel),wily xenial))
-  bd_gcc = g++-5 [$(hotspot_archs)], g++-4.9 [$(strip $(foreach a,$(hotspot_archs), !$(a)))], g++-4.9 [arm64],
-else ifneq (,$(filter $(distrel),stretch))
-  bd_gcc = g++-6 <!cross>,
-else ifneq (,$(filter $(distrel),artful bionic))
-  bd_gcc = g++-7 <!cross>,
-else ifneq (,$(filter $(distrel),precise))
-  # FIXME: ftbfs on armhf with the default GCC
-  bd_gcc = g++-8,
-else ifneq (,$(filter $(distrel),buster bionic cosmic disco))
-  bd_gcc = g++-8 <!cross>,
-else ifneq (,$(filter $(distrel),focal))
-  bd_gcc = g++-9 <!cross>,
+ifneq (,$(filter $(distrel),precise))
+  bd_syslibs = zlib1g-dev, libattr1-dev,
 else
-  bd_gcc = g++-10 <!cross>,
+  bd_syslibs = zlib1g-dev:native, zlib1g-dev, libattr1-dev,
 endif
-bd_syslibs = zlib1g-dev:native, zlib1g-dev, libattr1-dev,
 ifneq (,$(filter $(distrel),squeeze lucid))
   bd_syslibs += libpng12-dev, libjpeg62-dev,
 else ifneq (,$(filter $(distrel),wheezy precise quantal raring saucy))
@@ -613,9 +625,11 @@ bd_syslibs += \
 bd_openjdk = \
 	libxtst-dev, libxi-dev, libxt-dev, libxaw7-dev, libxrender-dev, libcups2-dev, \
 	libasound2-dev, liblcms2-dev, libfreetype6-dev (>= 2.2.1), \
-	libharfbuzz-dev, \
 	libxinerama-dev, libkrb5-dev, xsltproc, libpcsclite-dev, libxrandr-dev, \
 	libelf-dev, libfontconfig1-dev, libgtk2.0-0 | libgtk-3-0,
+ifeq ($(with_system_hb),yes)
+  bd_openjdk += libharfbuzz-dev,
+endif
 
 pkg_ffidev = libffi-dev
 
@@ -638,6 +652,16 @@ ifeq ($(with_nss),yes)
 endif
 ifeq ($(with_systemtap),yes)
   bd_systemtap = systemtap-sdt-dev [!sh4],
+endif
+
+ifeq (,$(filter $(distrel),jessie stretch buster precise trusty xenial bionic focal groovy))
+  with_debugedit = yes
+  bd_debugedit = debugedit (>= 4.16),
+  build_id_seed = $(PKGSOURCE)-$(PKGVERSION)
+endif
+
+ifeq (,$(filter $(distrel),jessie stretch buster precise trusty xenial bionic))
+  bd_strip_ndt = strip-nondeterminism,
 endif
 
 ifeq (,$(filter $(distrel),precise))
@@ -691,7 +715,9 @@ ifneq (,$(filter $(distrel),squeeze wheezy jessie stretch lucid precise xenial))
 else
   dlopen_jre_depends = libgl1,
 endif
-dlopen_jre_depends += libharfbuzz0b,
+ifeq ($(with_system_hb),yes)
+  dlopen_jre_depends += libharfbuzz0b,
+endif
 dlopen_jre_recommends =
 
 # .desktop files need to be multiarch installable
@@ -808,6 +834,10 @@ control_vars += '-Vjcommon:Depends=$(pkg_jcommon)'
 
 control_vars += '-Vjrehl:Breaks=$(jrehl_breaks)'
 
+ifneq ($(with_debugedit),yes)
+  control_vars += '-Vdbg:Conflicts=openjdk-12-dbg, openjdk-13-dbg, openjdk-14-dbg, openjdk-15-dbg, openjdk-16-dbg, openjdk-17-dbg'
+endif
+
 debian/control: debian/control.in debian/tests/control debian/rules
 	@cp -p debian/control debian/control.old
 	sed \
@@ -824,6 +854,8 @@ debian/control: debian/control.in debian/tests/control debian/rules
 	      -e 's/@bd_nss@/$(bd_nss)/g' \
 	      -e 's/@bd_systemtap@/$(bd_systemtap)/g' \
 	      -e 's/@bd_ant@/$(bd_ant)/g' \
+	      -e 's/@bd_debugedit@/$(bd_debugedit)/g' \
+	      -e 's/@bd_strip_ndt@/$(bd_strip_ndt)/g' \
 	      -e 's/@bd_check@/$(bd_check)/g' \
 	      -e 's/@core_fonts@/$(core_fonts)/g' \
 	      -e 's/@cjk_fonts@/$(cjk_fonts)/g' \
@@ -1199,6 +1231,13 @@ install: packaging-files
 	: # compress manpages
 	find $(d)/$(basedir)/man -type f ! -type l | xargs gzip -9v -n
 
+ifeq ($(with_debugedit),yes)
+	: # rewrite build-id
+	for i in $$(find $(d)/$(basedir) -type f | xargs -r file | sed -n '/ELF/s/:.*//p'); do \
+	  debugedit --build-id --build-id-seed='$(build_id_seed)' $$i; \
+	done
+endif
+
 	mkdir -p $(d)/$(etcdir)/security
 	mkdir -p $(d)/$(etcdir)/security/policy/limited
 	mkdir -p $(d)/$(etcdir)/security/policy/unlimited
@@ -1353,7 +1392,7 @@ endif
 	cd $(CURDIR)/$(d); \
 	for i in $(basedir)/lib/*.so; do \
 	  case "$$i" in \
-	    */libjavagtk.so|*/libsplashscreen.so|*/libjsoundalsa.so|*/xawt) echo $$i >> ../$(p_jre).install;; \
+	    */libawt_xawt.so|*/libjawt.so|*/libsplashscreen.so|*/xawt) echo $$i >> ../$(p_jre).install;; \
 	    */zero) echo $$i >> ../$(p_jrez).install;; \
 	    *) echo $$i >> ../$(p_jrehl).install; \
 	  esac; \
@@ -1450,9 +1489,6 @@ ifneq (,$(wildcard $(builddir)/$(sdkimg)/lib/*.debuginfo))
 	  echo '$(basedir)/lib/*/*.debuginfo'; \
 	) > debian/$(p_dbg).install
 endif
-
-	: # FIXME: the targets are not installed ...
-	rm -rfv $(d)/$(basedir)/lib/jfr
 
 	dh_install --sourcedir=debian/tmp -XLICENSE
 ifeq (,$(findstring old, $(old_debhelper)))
@@ -1565,7 +1601,7 @@ endif
 	) > $(d_dbg).links
 
 	: # OpenJDK Stack Unwinder and Frame Decorator
-ifneq (,$(filter $(DEB_HOST_ARCH),amd64 kfreebsd-amd64))
+ifneq (,$(filter $(DEB_HOST_ARCH),amd64))
 	mkdir -p $(d_jrehl)/usr/share/gdb/auto-load/$(basedir)/jre/lib/server
 	cp debian/dbg.py \
 	  $(d_jrehl)/usr/share/gdb/auto-load/$(basedir)/jre/lib/server/libjvm.so-gdb.py

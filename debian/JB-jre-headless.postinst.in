@@ -52,6 +52,11 @@ configure)
 	done
     fi
 
+    if dpkg --compare-versions "$2" lt-nl "11.0.11+7-2~" ; then
+        # jfr moved from jre to jdk, remove dangling alternative on upgrades
+	test -x $basedir/bin/jfr || update-alternatives --remove jfr $basedir/bin/jfr
+    fi
+
     if [ "$update_alternatives" = y ]; then
     if [ -n "$multiarch" ] && [ "$DPKG_MAINTSCRIPT_ARCH" != $(dpkg --print-architecture) ]; then
 	priority=$(expr $priority - 1)
